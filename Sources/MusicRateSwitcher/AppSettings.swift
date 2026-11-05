@@ -25,11 +25,6 @@ final class AppSettings {
         static let selectedDeviceUID = "selectedDeviceUID"
         static let showRateInMenuBar = "showRateInMenuBar"
         static let menuBarStyle = "menuBarStyle"
-        static let appleMusicEnabled = "appleMusicEnabled"
-        static let neteaseMusicEnabled = "neteaseMusicEnabled"
-        static let qqMusicEnabled = "qqMusicEnabled"
-        static let sodaMusicEnabled = "sodaMusicEnabled"
-        static let hasShownWelcome = "hasShownWelcome"
         static let didMigrateLegacyDefaults = "didMigrateLegacyDefaults"
     }
 
@@ -39,11 +34,7 @@ final class AppSettings {
         migrateLegacyDefaultsIfNeeded()
         defaults.register(defaults: [
             Key.autoSwitch: true,
-            Key.showRateInMenuBar: true,
-            Key.appleMusicEnabled: true,
-            Key.neteaseMusicEnabled: true,
-            Key.qqMusicEnabled: true,
-            Key.sodaMusicEnabled: true
+            Key.showRateInMenuBar: true
         ])
     }
 
@@ -77,28 +68,8 @@ final class AppSettings {
         }
     }
 
-    var hasShownWelcome: Bool {
-        get { defaults.bool(forKey: Key.hasShownWelcome) }
-        set { defaults.set(newValue, forKey: Key.hasShownWelcome) }
-    }
-
-    func isSourceEnabled(_ player: MusicPlayerID) -> Bool {
-        switch player {
-        case .appleMusic: return defaults.bool(forKey: Key.appleMusicEnabled)
-        case .neteaseMusic: return defaults.bool(forKey: Key.neteaseMusicEnabled)
-        case .qqMusic: return defaults.bool(forKey: Key.qqMusicEnabled)
-        case .sodaMusic: return defaults.bool(forKey: Key.sodaMusicEnabled)
-        }
-    }
-
-    func setSourceEnabled(_ enabled: Bool, player: MusicPlayerID) {
-        switch player {
-        case .appleMusic: defaults.set(enabled, forKey: Key.appleMusicEnabled)
-        case .neteaseMusic: defaults.set(enabled, forKey: Key.neteaseMusicEnabled)
-        case .qqMusic: defaults.set(enabled, forKey: Key.qqMusicEnabled)
-        case .sodaMusic: defaults.set(enabled, forKey: Key.sodaMusicEnabled)
-        }
-    }
+    // AM is the only source; old per-player preferences cannot disable it.
+    func isSourceEnabled(_ player: MusicPlayerID) -> Bool { player == .appleMusic }
 
     private func migrateLegacyDefaultsIfNeeded() {
         guard defaults.object(forKey: Key.didMigrateLegacyDefaults) == nil else { return }

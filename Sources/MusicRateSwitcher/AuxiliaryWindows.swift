@@ -5,16 +5,12 @@ import SwiftUI
 /// Hosts the About/Welcome and Diagnostics windows. Each is created lazily and
 /// reused so repeated clicks just bring the existing window forward.
 final class AuxiliaryWindows {
-    static let repositoryURL = URL(string: "https://github.com/Arczotis/MusicRateSwitcher")!
-    static let releasesURL = URL(string: "https://github.com/Arczotis/MusicRateSwitcher/releases")!
-    static let email = "841530503@qq.com"
-
     private var aboutWindow: NSWindow?
     private var diagnosticsWindow: NSWindow?
 
     func showAbout(firstLaunch: Bool) {
         let view = AboutView(firstLaunch: firstLaunch) { [weak self] in self?.aboutWindow?.close() }
-        aboutWindow = present(aboutWindow, title: firstLaunch ? "欢迎使用" : "关于 MusicRateSwitcher", view: view)
+        aboutWindow = present(aboutWindow, title: "开源许可", view: view)
     }
 
     func showDiagnostics(text: String) {
@@ -58,99 +54,44 @@ struct AboutView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            ZStack {
-                LinearGradient(colors: [Palette.navy, Palette.deepBlue], startPoint: .top, endPoint: .bottom)
-                RadialGradient(colors: [Palette.electric.opacity(0.5), .clear], center: .center, startRadius: 0, endRadius: 180)
-                VStack(spacing: 10) {
-                    Image(nsImage: NSApp.applicationIconImage)
-                        .resizable()
-                        .frame(width: 92, height: 92)
-                        .shadow(color: Palette.electric.opacity(0.6), radius: 18, y: 4)
-                    Text(firstLaunch ? "欢迎使用 MusicRateSwitcher" : "MusicRateSwitcher")
-                        .font(.system(size: 20, weight: .bold))
-                        .foregroundStyle(.white)
-                    Text("版本 \(version)")
-                        .font(.system(size: 11, weight: .medium, design: .rounded))
-                        .foregroundStyle(Color.white.opacity(0.6))
-                }
-                .padding(.top, 30)
-                .padding(.bottom, 22)
-            }
-            .fixedSize(horizontal: false, vertical: true)
-
-            VStack(spacing: 16) {
-                Text("自动识别播放器当前曲目的源采样率，并把 macOS 输出设备切换到匹配的格式，减少不必要的重采样。")
-                    .font(.system(size: 12.5))
-                    .multilineTextAlignment(.center)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                HStack(spacing: 14) {
-                    ForEach(MusicPlayerID.allCases, id: \.self) { player in
-                        VStack(spacing: 5) {
-                            PlayerIcon(player: player, size: 34)
-                            Text(player.displayName)
-                                .font(.system(size: 10))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-
-                if firstLaunch {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Tip(symbol: "menubar.arrow.up.rectangle", text: "点击菜单栏中的波形图标打开控制面板")
-                        Tip(symbol: "play.circle", text: "在任一受支持的播放器中开始播放即可自动匹配")
-                        Tip(symbol: "lock.shield", text: "网易云的缓存在它自己的容器里：首次使用时在面板点“选择目录”授权一次即可")
-                    }
-                    .padding(12)
+        VStack(alignment: .leading, spacing: 16) {
+            Text("AMSwitcher").font(.system(size: 20, weight: .semibold))
+            Text("版本 \(version) · Apple Music 采样率匹配")
+                .font(.system(size: 12)).foregroundStyle(.secondary)
+            Divider()
+            Text("基于 MusicRateSwitcher 修改。原项目版权 © 2026 Arczotis。")
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+            ScrollView {
+                Text(Self.license).font(.system(size: 10)).textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.primary.opacity(0.05)))
-                }
-
-                VStack(spacing: 8) {
-                    Button {
-                        NSWorkspace.shared.open(AuxiliaryWindows.repositoryURL)
-                    } label: {
-                        Label("在 GitHub 上点个 Star", systemImage: "star.fill")
-                    }
-                    .buttonStyle(BrandButtonStyle(prominent: true))
-
-                    Button(firstLaunch ? "开始使用" : "关闭", action: dismiss)
-                        .buttonStyle(BrandButtonStyle(prominent: false))
-                        .keyboardShortcut(.defaultAction)
-                }
-
-                HStack(spacing: 6) {
-                    Text("Arczotis")
-                    Text("·")
-                    Link(AuxiliaryWindows.email, destination: URL(string: "mailto:\(AuxiliaryWindows.email)")!)
-                    Text("·")
-                    Text("MIT License")
-                }
-                .font(.system(size: 10.5))
-                .foregroundStyle(.tertiary)
-            }
-            .padding(22)
-        }
-        .frame(width: 380)
-        .ignoresSafeArea()
+            }.frame(height: 210)
+            HStack { Spacer(); Button("关闭", action: dismiss).keyboardShortcut(.defaultAction) }
+        }.padding(24).frame(width: 400)
     }
 
-    private struct Tip: View {
-        let symbol: String
-        let text: String
+    private static let license = """
+    MIT License
 
-        var body: some View {
-            HStack(spacing: 9) {
-                Image(systemName: symbol)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(Palette.electric)
-                    .frame(width: 18)
-                Text(text).font(.system(size: 11.5))
-            }
-        }
-    }
+    Copyright (c) 2026 MusicRateSwitcher contributors
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+    """
 }
 
 // MARK: - Diagnostics

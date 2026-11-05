@@ -14,7 +14,7 @@ project_dir=${script_dir:h}
 cd "$project_dir"
 
 version=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Resources/Info.plist)
-name="MusicRateSwitcher-v${version}-macOS"
+name="AMSwitcher-v${version}-macOS"
 dist_dir="$project_dir/dist"
 
 build_stage=$(mktemp -d)
@@ -30,7 +30,7 @@ ditto -c -k --sequesterRsrc --keepParent "$app" "$dist_dir/$name.zip"
 
 cp -R "$app" "$staging/"
 ln -s /Applications "$staging/Applications"
-hdiutil create -quiet -volname "MusicRateSwitcher $version" -srcfolder "$staging" \
+hdiutil create -quiet -volname "AMSwitcher $version" -srcfolder "$staging" \
     -fs HFS+ -format UDZO -imagekey zlib-level=9 "$dist_dir/$name.dmg"
 
 (cd "$dist_dir" && shasum -a 256 "$name.zip" > "$name.zip.sha256" && shasum -a 256 "$name.dmg" > "$name.dmg.sha256")

@@ -25,7 +25,7 @@ enum SnapshotRenderer {
             let light = NSImage(contentsOf: directory.appendingPathComponent("panel-light.png")),
             let dark = NSImage(contentsOf: directory.appendingPathComponent("panel-dark.png"))
         else { return }
-        let format = SourceAudioFormat(sampleRate: 96_000, bitDepth: 24, channels: 2, codec: "FLAC")
+        let format = SourceAudioFormat(sampleRate: 96_000, bitDepth: 24, channels: 2, codec: "ALAC")
         let chip = StatusItemRenderer.image(style: .compact, phase: .playing, format: format)
         let view = ShowcaseView(light: light, dark: dark, chip: chip)
         render(view, to: directory.appendingPathComponent("showcase.png"), appearance: .darkAqua)
@@ -35,9 +35,9 @@ enum SnapshotRenderer {
         let model = PanelModel()
         let info = NSDictionary(contentsOfFile: "Resources/Info.plist")
         model.version = info?["CFBundleShortVersionString"] as? String ?? "dev"
-        let format = SourceAudioFormat(sampleRate: 96_000, bitDepth: 24, channels: 2, codec: "FLAC")
+        let format = SourceAudioFormat(sampleRate: 96_000, bitDepth: 24, channels: 2, codec: "ALAC")
         let dac = AudioOutputDevice(
-            id: 1, uid: "dac", name: "MOONDROP Dawn Pro",
+            id: 1, uid: "dac", name: "FIIO KA11",
             sampleRate: playing ? 96_000 : 44_100,
             supportedRates: [44_100, 48_000, 88_200, 96_000, 176_400, 192_000, 352_800, 384_000],
             isDefault: true
@@ -48,26 +48,22 @@ enum SnapshotRenderer {
         )
         model.devices = [dac, speakers]
         model.selectedDevice = dac
-        model.players = [
-            PlayerRowState(player: .appleMusic, phase: .waiting, isEnabled: true, isInstalled: true, isActive: false),
-            PlayerRowState(player: .neteaseMusic, phase: playing ? .playing(format) : .permissionRequired, isEnabled: true, isInstalled: true, isActive: playing),
-            PlayerRowState(
-                player: .qqMusic,
-                phase: playing ? .playing(SourceAudioFormat(sampleRate: 44_100, bitDepth: 16, channels: 2, codec: "FLAC (QQ)")) : .notRunning,
-                isEnabled: true, isInstalled: true, isActive: false
-            ),
-            PlayerRowState(player: .sodaMusic, phase: .disabled, isEnabled: false, isInstalled: true, isActive: false)
-        ]
+        model.players = [PlayerRowState(player: .appleMusic, phase: playing ? .playing(format) : .waiting, isEnabled: true, isInstalled: true, isActive: playing)]
+        model.trackTitle = playing ? "Midnight, in colour" : "Apple Music"
+        model.trackArtist = playing ? "示例歌曲 · 专辑封面预览" : "开始播放，自动匹配采样率"
+        model.isPlaying = playing
+        model.canControlPlayback = playing
         if playing {
-            model.activeDetection = DetectedSourceFormat(player: .neteaseMusic, format: format)
+            model.artwork = ProcessInfo.processInfo.environment["MRS_PREVIEW_ART"].flatMap { NSImage(contentsOfFile: $0) }
+        }
+        if playing {
+            model.activeDetection = DetectedSourceFormat(player: .appleMusic, format: format)
             model.sync = .matched(96_000)
         }
-        model.launchAtLogin = true
-        model.launchAtLoginAvailable = true
         return model
     }
 
-    private static func render<V: View>(_ view: V, to url: URL, appearance: NSAppearance.Name) {
+    static func render<V: View>(_ view: V, to url: URL, appearance: NSAppearance.Name) {
         let host = NSHostingView(rootView: view.background(Color(nsColor: .windowBackgroundColor)))
         host.appearance = NSAppearance(named: appearance)
         let size = host.fittingSize
@@ -140,7 +136,7 @@ enum SnapshotRenderer {
                             .lineSpacing(6)
                             .foregroundStyle(Color.white.opacity(0.82))
                         HStack(spacing: 10) {
-                            ForEach(MusicPlayerID.allCases, id: \.self) { player in
+                            ForEach([MusicPlayerID.appleMusic], id: \.self) { player in
                                 HStack(spacing: 7) {
                                     PlayerIcon(player: player, size: 24)
                                     Text(player.displayName).font(.system(size: 14, weight: .medium))
@@ -197,7 +193,7 @@ enum SnapshotRenderer {
 
     /// Every menu bar style on a fake menu bar strip, idle and playing.
     private static func renderMenuBar(to url: URL, dark: Bool) {
-        let format = SourceAudioFormat(sampleRate: 96_000, bitDepth: 24, channels: 2, codec: "FLAC")
+        let format = SourceAudioFormat(sampleRate: 96_000, bitDepth: 24, channels: 2, codec: "ALAC")
         let rows: [(String, NSImage)] = [
             ("待机", StatusItemRenderer.image(style: .compact, phase: .idle, format: nil)),
             ("图标", StatusItemRenderer.image(style: .icon, phase: .playing, format: format)),

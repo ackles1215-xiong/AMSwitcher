@@ -1,23 +1,20 @@
 import AppKit
+import CoreImage
 import RateSwitcherCore
 
 /// Commands the panel can send back to the app delegate.
 protocol PanelActions: AnyObject {
     func setAutomatic(_ enabled: Bool)
-    func setPlayer(_ player: MusicPlayerID, enabled: Bool)
     func openPlayer(_ player: MusicPlayerID)
     func selectDevice(uid: String?)
     func setMenuBarStyle(_ style: MenuBarStyle)
-    func setLaunchAtLogin(_ enabled: Bool)
     func refreshNow()
-    func openNeteaseCachePicker()
-    func openFullDiskAccessSettings()
-    func copyNeteaseCachePath()
     func openAudioMIDISetup()
     func showDiagnostics()
     func openLog()
     func copyDiagnostics()
     func showAbout()
+    func transport(_ command: String)
     func quit()
 }
 
@@ -51,7 +48,7 @@ enum SyncState: Equatable {
 
 /// Snapshot of everything the status item and popover render.
 final class PanelModel: ObservableObject {
-    @Published var players: [PlayerRowState] = MusicPlayerID.allCases.map {
+    @Published var players: [PlayerRowState] = [MusicPlayerID.appleMusic].map {
         PlayerRowState(player: $0, phase: .notRunning, isEnabled: true, isInstalled: false, isActive: false)
     }
     @Published var activeDetection: DetectedSourceFormat?
@@ -59,17 +56,38 @@ final class PanelModel: ObservableObject {
     @Published var selectedDevice: AudioOutputDevice?
     @Published var followsSystemDefault = true
     @Published var autoSwitch = true
-    @Published var launchAtLogin = false
-    @Published var launchAtLoginAvailable = false
     @Published var menuBarStyle: MenuBarStyle = .compact
     @Published var sync: SyncState = .idle
-    /// Directory NetEase is playing from when access was refused — the file
-    /// picker opens straight into it.
-    @Published var neteaseCacheHint: String?
-    /// Directory the user has already granted, if any.
-    @Published var neteaseGrantedPath: String?
+    @Published var trackTitle = "Apple Music"
+    @Published var trackArtist = "打开面板后读取当前歌曲"
+    @Published var artwork: NSImage? {
+        didSet { artworkPalette = artwork.flatMap(Self.makePalette) ?? Self.defaultPalette }
+    }
+    @Published private(set) var artworkPalette: [NSColor] = PanelModel.defaultPalette
+    @Published var isPlaying = false
+    @Published var canControlPlayback = false
+    @Published var metadataHint: String?
 
     weak var actions: PanelActions?
+
+    static let defaultPalette = [NSColor(srgbRed: 0.38, green: 0.17, blue: 0.36, alpha: 1), NSColor(srgbRed: 0.10, green: 0.23, blue: 0.38, alpha: 1)]
+    private static let imageContext = CIContext(options: [.cacheIntermediates: false])
+    // Only two average colours are retained. No artwork texture behind the player.
+    private static func makePalette(_ image: NSImage) -> [NSColor]? {
+        var rect = CGRect(origin: .zero, size: image.size)
+        guard let cg = image.cgImage(forProposedRect: &rect, context: nil, hints: nil) else { return nil }
+        let input = CIImage(cgImage: cg)
+        return (0..<2).map { half in
+            let area = CGRect(x: 0, y: CGFloat(half) * input.extent.height / 2, width: input.extent.width, height: input.extent.height / 2)
+            let average = input.applyingFilter("CIAreaAverage", parameters: [kCIInputExtentKey: CIVector(cgRect: area)])
+            var pixel = [UInt8](repeating: 0, count: 4)
+            imageContext.render(average, toBitmap: &pixel, rowBytes: 4, bounds: CGRect(x: 0, y: 0, width: 1, height: 1), format: .RGBA8, colorSpace: CGColorSpaceCreateDeviceRGB())
+            let color = NSColor(srgbRed: CGFloat(pixel[0])/255, green: CGFloat(pixel[1])/255, blue: CGFloat(pixel[2])/255, alpha: 1)
+            var hue: CGFloat = 0, saturation: CGFloat = 0, brightness: CGFloat = 0, alpha: CGFloat = 0
+            color.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha)
+            return NSColor(calibratedHue: hue, saturation: min(0.8, max(0.35, saturation)), brightness: min(0.52, max(0.32, brightness)), alpha: 1)
+        }
+    }
 
     var version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
 }

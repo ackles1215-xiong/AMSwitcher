@@ -33,7 +33,6 @@ struct PanelView: View {
         VStack(spacing: 14) {
             HeaderView(model: model)
             NowPlayingCard(model: model)
-            PlayersSection(model: model)
             OutputSection(model: model)
             PreferencesSection(model: model)
             FooterView(model: model)
@@ -54,7 +53,7 @@ private struct HeaderView: View {
         HStack(spacing: 10) {
             BrandMark(size: 30)
             VStack(alignment: .leading, spacing: 1) {
-                Text("MusicRateSwitcher")
+                Text("AMSwitcher")
                     .font(.system(size: 13.5, weight: .semibold))
                 Text(model.autoSwitch ? "自动匹配输出采样率" : "自动匹配已暂停")
                     .font(.system(size: 11))
@@ -117,104 +116,77 @@ struct WaveGlyph: Shape {
 private struct NowPlayingCard: View {
     @ObservedObject var model: PanelModel
 
-    private var detection: DetectedSourceFormat? { model.activeDetection }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 7) {
-                if let detection {
-                    PlayerIcon(player: detection.player, size: 18)
-                    Text(detection.player.displayName)
-                        .font(.system(size: 12, weight: .semibold))
-                    LiveBars(color: Palette.cyan)
-                        .frame(width: 12, height: 10)
-                } else {
-                    Image(systemName: "pause.circle")
-                        .font(.system(size: 13, weight: .medium))
-                    Text("等待播放")
-                        .font(.system(size: 12, weight: .semibold))
-                }
-                Spacer(minLength: 6)
-                SyncBadge(sync: model.sync, automatic: model.autoSwitch, hasSource: detection != nil)
-            }
-            .foregroundStyle(Color.white.opacity(0.92))
-
-            HStack(alignment: .firstTextBaseline, spacing: 5) {
-                Text(detection.map { SourceAudioFormat.rateNumber($0.format.sampleRate) } ?? "--")
-                    .font(.system(size: 46, weight: .semibold, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(
-                        detection == nil
-                            ? AnyShapeStyle(Color.white.opacity(0.35))
-                            : AnyShapeStyle(LinearGradient(colors: [.white, Palette.cyan], startPoint: .top, endPoint: .bottom))
-                    )
-                Text("kHz")
-                    .font(.system(size: 16, weight: .medium, design: .rounded))
-                    .foregroundStyle(Color.white.opacity(0.6))
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Label("APPLE MUSIC", systemImage: "music.note")
+                    .font(.system(size: 9, weight: .bold)).tracking(1.5)
                 Spacer()
-                if let detection {
-                    QualityTag(text: detection.format.qualityLabel)
-                }
+                SyncBadge(sync: model.sync, automatic: model.autoSwitch, hasSource: model.activeDetection != nil)
             }
-            .padding(.top, 6)
-
-            Text(formatLine)
-                .font(.system(size: 11.5, weight: .medium, design: .monospaced))
-                .foregroundStyle(Color.white.opacity(0.62))
-                .lineLimit(1)
-                .padding(.top, -2)
-
+            .foregroundStyle(.white.opacity(0.8))
+            HStack(alignment: .center, spacing: 14) {
+                artwork.frame(width: 94, height: 94)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .shadow(color: .black.opacity(0.25), radius: 10, y: 5)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(model.trackTitle).font(.system(size: 18, weight: .semibold))
+                        .lineLimit(2)
+                    Text(model.trackArtist).font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(0.7)).lineLimit(2)
+                    HStack(spacing: 22) {
+                        transport("backward.end.fill", command: "previous track", label: "上一首")
+                        transport(model.isPlaying ? "pause.fill" : "play.fill", command: "playpause", label: model.isPlaying ? "暂停" : "播放")
+                        transport("forward.end.fill", command: "next track", label: "下一首")
+                    }
+                    .padding(.top, 8)
+                    .disabled(!model.canControlPlayback)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 14).fill(Color(red: 0.055, green: 0.065, blue: 0.095).opacity(0.94)))
+            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.white.opacity(0.08), lineWidth: 0.5))
+            if let hint = model.metadataHint {
+                Text(hint).font(.system(size: 10)).foregroundStyle(.white.opacity(0.65))
+            }
+            HStack(spacing: 6) {
+                Text(model.activeDetection.map { $0.format.description } ?? "等待识别实际播放格式")
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .lineLimit(1).minimumScaleFactor(0.8)
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(.white.opacity(0.8))
             SignalPath(model: model)
-                .padding(.top, 14)
         }
-        .padding(14)
-        .background(CardBackground(active: detection != nil))
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.1), lineWidth: 0.75)
-        )
-        .shadow(color: Palette.navy.opacity(0.35), radius: 10, y: 4)
+        .padding(16)
+        .foregroundStyle(.white)
+        .background {
+            LinearGradient(colors: model.artworkPalette.map { Color(nsColor: $0) } + [Palette.navy], startPoint: .topLeading, endPoint: .bottomTrailing)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 18))
+        .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(.white.opacity(0.12), lineWidth: 0.75))
         .environment(\.colorScheme, .dark)
     }
 
-    private var formatLine: String {
-        guard let format = detection?.format else { return "在任一受支持的播放器中开始播放" }
-        var parts: [String] = []
-        if let bitDepth = format.bitDepth { parts.append("\(bitDepth)-bit") }
-        parts.append(format.codec)
-        if let channels = format.channelDescription { parts.append(channels) }
-        return parts.joined(separator: " · ")
-    }
-}
-
-private struct CardBackground: View {
-    let active: Bool
-
-    var body: some View {
-        ZStack {
-            LinearGradient(colors: [Palette.navy, Palette.deepBlue], startPoint: .topLeading, endPoint: .bottomTrailing)
-            RadialGradient(
-                colors: [Palette.electric.opacity(0.45), .clear],
-                center: .init(x: 0.95, y: 0.15),
-                startRadius: 0,
-                endRadius: 180
-            )
-            WaveGlyph(
-                heights: (0..<26).map { index in
-                    let x = Double(index) / 25
-                    let envelope = exp(-pow((x - 0.62) * 3.2, 2)) * (0.65 + 0.35 * sin(Double(index) * 1.7))
-                    return CGFloat(active ? 0.12 + 0.88 * envelope : 0.06 + 0.16 * envelope)
-                },
-                barWidth: 2.4
-            )
-            .fill(LinearGradient(colors: [Palette.electric, Palette.cyan], startPoint: .leading, endPoint: .trailing))
-            .opacity(active ? 0.22 : 0.16)
-            .frame(width: 190, height: 70)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-            .padding(.top, 34)
-            .padding(.trailing, 10)
+    @ViewBuilder private var artwork: some View {
+        if let image = model.artwork {
+            Image(nsImage: image).resizable().scaledToFill()
+        } else {
+            ZStack {
+                LinearGradient(colors: [.pink.opacity(0.8), Palette.deepBlue], startPoint: .topLeading, endPoint: .bottomTrailing)
+                Image(systemName: "music.note").font(.system(size: 38, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.85))
+            }
         }
+    }
+
+    private func transport(_ symbol: String, command: String, label: String) -> some View {
+        Button { model.actions?.transport(command) } label: {
+            Image(systemName: symbol).font(.system(size: 17, weight: .semibold))
+                .frame(width: 24, height: 24).contentShape(Rectangle())
+        }.buttonStyle(.plain).help(label).accessibilityLabel(label)
     }
 }
 
@@ -376,193 +348,6 @@ private struct SignalPath: View {
     }
 }
 
-// MARK: - Players
-
-private struct PlayersSection: View {
-    @ObservedObject var model: PanelModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            SectionTitle(
-                title: "播放器",
-                trailing: "\(model.players.filter(\.isEnabled).count)/\(model.players.count) 已启用"
-            )
-            VStack(spacing: 2) {
-                ForEach(model.players) { row in
-                    PlayerRow(row: row, actions: model.actions)
-                }
-            }
-            .padding(4)
-            .background(SectionBackground())
-        }
-    }
-}
-
-private struct PlayerRow: View {
-    let row: PlayerRowState
-    weak var actions: PanelActions?
-    @StateObject private var hovering = Flag()
-
-    var body: some View {
-        HStack(spacing: 10) {
-            PlayerIcon(player: row.player, size: 26)
-                .saturation(row.isEnabled ? 1 : 0)
-                .opacity(row.isEnabled ? 1 : 0.5)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(row.player.displayName)
-                    .font(.system(size: 12.5, weight: .medium))
-                    .foregroundStyle(row.isEnabled ? .primary : .secondary)
-                HStack(spacing: 4) {
-                    Circle().fill(statusColor).frame(width: 5, height: 5)
-                    Text(statusText)
-                        .font(isPlaying ? .system(size: 10.5, design: .monospaced) : .system(size: 10.5))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .help(statusText)
-                }
-            }
-            Spacer(minLength: 6)
-            if row.phase == .permissionRequired {
-                HStack(spacing: 4) {
-                    MiniButton(title: "选择目录", prominent: true) { actions?.openNeteaseCachePicker() }
-                        .help("选中网易云音乐的 \(NeteaseCacheAccess.cacheFolderName) 缓存目录；授权一次后无需再管权限")
-                    MiniButton(title: "完全磁盘访问", prominent: false) { actions?.openFullDiskAccessSettings() }
-                        .help("打开“系统设置 → 隐私与安全性 → 完全磁盘访问权限”，把 MusicRateSwitcher 加入列表后重新打开 App")
-                }
-            }
-            if row.isActive {
-                LiveBars(color: Palette.electric)
-                    .frame(width: 14, height: 12)
-                    .help("正在输出")
-            }
-            Toggle("", isOn: Binding(
-                get: { row.isEnabled },
-                set: { actions?.setPlayer(row.player, enabled: $0) }
-            ))
-            .toggleStyle(BrandSwitchStyle())
-            .help(row.isEnabled ? "停用 \(row.player.displayName) 数据源" : "启用 \(row.player.displayName) 数据源")
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(row.isActive ? Palette.electric.opacity(0.1) : Color.primary.opacity(hovering.value && row.isInstalled ? 0.06 : 0))
-        )
-        .contentShape(Rectangle())
-        .onHover { hovering.value = $0 }
-        .onTapGesture { if row.isInstalled { actions?.openPlayer(row.player) } }
-        .help(row.isInstalled ? "打开 \(row.player.displayName)" : "未安装 \(row.player.displayName)")
-    }
-
-    private var isPlaying: Bool {
-        if case .playing = row.phase { return true }
-        return false
-    }
-
-    private var statusText: String {
-        switch row.phase {
-        case .disabled: return "已停用"
-        case .notRunning: return row.isInstalled ? "未运行" : "未安装"
-        case .waiting: return "等待播放"
-        case .detecting: return "正在识别…"
-        case .playing(let format):
-            var parts = [SourceAudioFormat.formatRate(format.sampleRate)]
-            if let bitDepth = format.bitDepth { parts.append("\(bitDepth)-bit") }
-            parts.append(format.codec)
-            return parts.joined(separator: " · ")
-        case .permissionRequired: return "需要授权读取缓存"
-        case .error(let message): return message
-        }
-    }
-
-    private var statusColor: Color {
-        if row.isActive { return Palette.success }
-        switch row.phase {
-        case .disabled, .notRunning: return Color.secondary.opacity(0.5)
-        case .waiting, .detecting: return Palette.warning
-        case .playing: return Palette.electric
-        case .permissionRequired: return Palette.warning
-        case .error: return Palette.danger
-        }
-    }
-}
-
-/// Compact capsule action, used by the permission row.
-private struct MiniButton: View {
-    let title: String
-    let prominent: Bool
-    let action: () -> Void
-    @StateObject private var hovering = Flag()
-
-    var body: some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 10.5, weight: .semibold))
-                .foregroundStyle(prominent ? Color.white : Color.primary.opacity(0.85))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(
-                    Capsule().fill(
-                        prominent
-                            ? Palette.warning.opacity(hovering.value ? 0.85 : 1)
-                            : Color.primary.opacity(hovering.value ? 0.2 : 0.1)
-                    )
-                )
-                .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering.value = $0 }
-    }
-}
-
-struct PlayerIcon: View {
-    let player: MusicPlayerID
-    let size: CGFloat
-
-    var body: some View {
-        if let icon = player.applicationIcon {
-            Image(nsImage: icon)
-                .resizable()
-                .interpolation(.high)
-                .frame(width: size, height: size)
-        } else {
-            Image(systemName: player.fallbackSymbol)
-                .font(.system(size: size * 0.46, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(width: size * 0.84, height: size * 0.84)
-                .background(
-                    RoundedRectangle(cornerRadius: size * 0.22, style: .continuous)
-                        .fill(Color(nsColor: player.tint).gradient)
-                )
-                .frame(width: size, height: size)
-        }
-    }
-}
-
-/// Animated equaliser bars shown next to the player that drives the output.
-struct LiveBars: View {
-    let color: Color
-
-    var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 20)) { context in
-            let t = context.date.timeIntervalSinceReferenceDate
-            GeometryReader { proxy in
-                HStack(alignment: .bottom, spacing: proxy.size.width * 0.14) {
-                    ForEach(0..<3) { index in
-                        let phase = t * (4.2 + Double(index) * 1.3) + Double(index) * 1.9
-                        let fraction = 0.3 + 0.7 * abs(sin(phase))
-                        RoundedRectangle(cornerRadius: 1)
-                            .fill(color)
-                            .frame(height: proxy.size.height * fraction)
-                    }
-                }
-                .frame(maxHeight: .infinity, alignment: .bottom)
-            }
-        }
-    }
-}
-
 // MARK: - Output
 
 private struct OutputSection: View {
@@ -595,11 +380,11 @@ private struct OutputSection: View {
                 }
 
                 if let device = model.selectedDevice, !device.supportedRates.isEmpty {
-                    RateChips(
+                    DisclosureGroup("支持的采样率") { RateChips(
                         rates: device.supportedRates,
                         current: device.sampleRate,
                         requested: model.activeDetection?.format.sampleRate
-                    )
+                    ) }.font(.system(size: 10)).foregroundStyle(.secondary)
                 }
             }
             .padding(10)
@@ -747,15 +532,6 @@ private struct PreferencesSection: View {
                         title: \.title
                     ) { model.actions?.setMenuBarStyle($0) }
                 }
-                Divider().padding(.leading, 36)
-                PreferenceRow(symbol: "power", title: "登录时启动") {
-                    Toggle("", isOn: Binding(
-                        get: { model.launchAtLogin },
-                        set: { model.actions?.setLaunchAtLogin($0) }
-                    ))
-                    .toggleStyle(BrandSwitchStyle())
-                    .disabled(!model.launchAtLoginAvailable)
-                }
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 2)
@@ -792,31 +568,25 @@ private struct FooterView: View {
         HStack(spacing: 2) {
             FooterButton(symbol: "arrow.clockwise", help: "立即重新检测 (⌘R)") { model.actions?.refreshNow() }
                 .keyboardShortcut("r", modifiers: .command)
-            FooterButton(symbol: "slider.horizontal.3", help: "打开“音频 MIDI 设置”") { model.actions?.openAudioMIDISetup() }
             Menu {
+                Button("音频 MIDI 设置") { model.actions?.openAudioMIDISetup() }
+                Divider()
                 Button("显示诊断摘要") { model.actions?.showDiagnostics() }
                 Button("打开日志文件") { model.actions?.openLog() }
                 Button("复制最近日志") { model.actions?.copyDiagnostics() }
                 Divider()
-                Button("选择网易云缓存目录") { model.actions?.openNeteaseCachePicker() }
-                Button("复制网易云缓存路径") { model.actions?.copyNeteaseCachePath() }
-                Button("完全磁盘访问权限") { model.actions?.openFullDiskAccessSettings() }
+                Button("开源许可") { model.actions?.showAbout() }
             } label: {
-                Image(systemName: "stethoscope")
-                    .font(.system(size: 12.5, weight: .medium))
+                Image(systemName: "ellipsis.circle").font(.system(size: 13))
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .frame(width: 30, height: 26)
-            .help("诊断")
-            FooterButton(symbol: "info.circle", help: "关于 MusicRateSwitcher") { model.actions?.showAbout() }
+            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+            .frame(width: 30, height: 26).help("更多")
             Spacer()
             Text("v\(model.version)")
                 .font(.system(size: 10.5, weight: .medium, design: .rounded))
                 .foregroundStyle(.tertiary)
                 .padding(.trailing, 4)
-            FooterButton(symbol: "power", help: "退出 MusicRateSwitcher (⌘Q)") { model.actions?.quit() }
+            FooterButton(symbol: "power", help: "退出 AMSwitcher (⌘Q)") { model.actions?.quit() }
                 .keyboardShortcut("q", modifiers: .command)
         }
         .padding(.top, 2)
@@ -942,4 +712,28 @@ func deviceSymbol(_ deviceName: String) -> String {
     if name.contains("hdmi") || name.contains("display") || name.contains("显示器") { return "tv" }
     if name.contains("dac") || name.contains("usb") || name.contains("interface") { return "hifispeaker.fill" }
     return "speaker.wave.2.fill"
+}
+
+struct PlayerIcon: View {
+    let player: MusicPlayerID
+    let size: CGFloat
+
+    var body: some View {
+        if let icon = player.applicationIcon {
+            Image(nsImage: icon)
+                .resizable()
+                .interpolation(.high)
+                .frame(width: size, height: size)
+        } else {
+            Image(systemName: player.fallbackSymbol)
+                .font(.system(size: size * 0.46, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: size * 0.84, height: size * 0.84)
+                .background(
+                    RoundedRectangle(cornerRadius: size * 0.22, style: .continuous)
+                        .fill(Color(nsColor: player.tint).gradient)
+                )
+                .frame(width: size, height: size)
+        }
+    }
 }

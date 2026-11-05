@@ -14,7 +14,7 @@ binary_dir=$(swift build -c "$configuration" --show-bin-path 2>/dev/null | tail 
 # Spotlight-indexed folder gets registered with LaunchServices, and macOS then
 # offers two copies of the app (this build and the installed one).
 out_dir=${OUT_DIR:-"$project_dir/.build/app"}
-app_dir="$out_dir/MusicRateSwitcher.app"
+app_dir="$out_dir/AMSwitcher.app"
 contents_dir="$app_dir/Contents"
 
 if [[ -d "$app_dir" ]]; then
@@ -25,6 +25,7 @@ mkdir -p "$contents_dir/MacOS" "$contents_dir/Resources"
 cp "$binary_dir/MusicRateSwitcher" "$contents_dir/MacOS/MusicRateSwitcher"
 cp "$project_dir/Resources/Info.plist" "$contents_dir/Info.plist"
 cp "$project_dir/Resources/AppIcon.icns" "$contents_dir/Resources/AppIcon.icns"
+cp "$project_dir/LICENSE" "$contents_dir/Resources/LICENSE.txt"
 chmod +x "$contents_dir/MacOS/MusicRateSwitcher"
 
 # Prefer the stable self-signed identity (see create-signing-cert.sh) so macOS

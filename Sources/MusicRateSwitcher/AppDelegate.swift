@@ -1,10 +1,9 @@
 import AppKit
 import Darwin
 import RateSwitcherCore
-import ServiceManagement
 import SwiftUI
 
-final class AppDelegate: NSObject, NSApplicationDelegate, PanelActions {
+final class AppDelegate: NSObject, NSApplicationDelegate, PanelActions, NSPopoverDelegate {
     private let settings = AppSettings.shared
     private let audio = CoreAudioController()
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -12,11 +11,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PanelActions {
     private let popover = NSPopover()
     private let windows = AuxiliaryWindows()
     private lazy var sources: [MusicPlayerID: SampleRateSource] = [
-        .appleMusic: AppleMusicPlaybackMonitor(),
-        .neteaseMusic: NeteasePlaybackMonitor(),
-        .qqMusic: QQMusicPlaybackMonitor(),
-        .sodaMusic: SodaPlaybackMonitor()
+        .appleMusic: AppleMusicPlaybackMonitor()
     ]
+
+    private lazy var nowPlaying = AppleMusicNowPlaying(model: model)
 
     private var sourceStates: [MusicPlayerID: SampleRateSourceState] = [:]
     private var detections: [MusicPlayerID: DetectedSourceFormat] = [:]
@@ -55,9 +53,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PanelActions {
         installTerminationHandlers()
         startActivityPolling()
         refreshUI()
-        if NeteaseCacheAccess.shared.startAccess() {
-            Diagnostics.shared.info("网易云缓存目录授权已恢复：\(NeteaseCacheAccess.shared.grantedPath ?? "-")")
-        }
         for (player, source) in sources where settings.isSourceEnabled(player) { source.start() }
         Diagnostics.shared.info("MusicRateSwitcher 已启动，自动切换=\(settings.autoSwitch)")
 
@@ -67,20 +62,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PanelActions {
         }
         #endif
 
-        if !settings.hasShownWelcome {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-                guard let self else { return }
-                self.windows.showAbout(firstLaunch: true)
-                self.settings.hasShownWelcome = true
-            }
-        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         activityTimer?.cancel()
         activityTimer = nil
         sources.values.forEach { $0.stop() }
-        NeteaseCacheAccess.shared.stopAccess()
+        nowPlaying.stop()
         Diagnostics.shared.info("MusicRateSwitcher 已退出")
     }
 
@@ -88,6 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PanelActions {
         let host = NSHostingController(rootView: PanelView(model: model))
         host.sizingOptions = .preferredContentSize
         popover.contentViewController = host
+        popover.delegate = self
         popover.behavior = .transient
         popover.animates = true
     }
@@ -106,9 +95,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PanelActions {
 
     private func handleState(_ state: SampleRateSourceState, from player: MusicPlayerID) {
         sourceStates[player] = state
-        if player == .neteaseMusic, case .permissionRequired(let directory) = state {
-            if model.neteaseCacheHint != directory { model.neteaseCacheHint = directory }
-        }
         switch state {
         case .appNotRunning, .waitingForPlayback, .permissionRequired, .error:
             detections[player] = nil
@@ -130,7 +116,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PanelActions {
     private func choosePreferredDetection() {
         activeDetection = PlaybackArbitrator.preferredDetection(
             from: Array(detections.values),
-            enabledPlayers: Set(MusicPlayerID.allCases.filter(settings.isSourceEnabled)),
+            enabledPlayers: Set([MusicPlayerID.appleMusic].filter(settings.isSourceEnabled)),
             outputActivity: outputActivity,
             activitySupported: audio.supportsProcessOutputActivity
         )
@@ -149,7 +135,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PanelActions {
         let previousActivity = outputActivity
         let previousPlayer = activeDetection?.player
         var refreshed: [MusicPlayerID: Bool] = [:]
-        for player in MusicPlayerID.allCases where settings.isSourceEnabled(player) {
+        for player in [MusicPlayerID.appleMusic] where settings.isSourceEnabled(player) {
             refreshed[player] = sources[player]?.activityProcessIDs.contains {
                 audio.processOutputActivity($0) == true
             } == true
@@ -189,7 +175,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PanelActions {
             DispatchQueue.main.async { self.refreshUI() }
             return
         }
-        model.players = MusicPlayerID.allCases.map { player in
+        model.players = [MusicPlayerID.appleMusic].map { player in
             PlayerRowState(
                 player: player,
                 phase: phase(for: player),
@@ -204,11 +190,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PanelActions {
         if model.selectedDevice != selected { model.selectedDevice = selected }
         model.followsSystemDefault = settings.selectedDeviceUID == nil
         model.autoSwitch = settings.autoSwitch
-        model.launchAtLogin = launchAtLoginEnabled
-        model.launchAtLoginAvailable = Bundle.main.bundleURL.pathExtension.lowercased() == "app"
         model.menuBarStyle = settings.menuBarStyle
-        let granted = NeteaseCacheAccess.shared.grantedPath
-        if model.neteaseGrantedPath != granted { model.neteaseGrantedPath = granted }
         if activeDetection == nil, !switching { model.sync = .idle }
         updateStatusButton()
     }
@@ -259,8 +241,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PanelActions {
         button.title = ""
         button.imagePosition = .imageOnly
         let rate = activeDetection.map { SourceAudioFormat.formatRate($0.format.sampleRate) } ?? "等待播放"
-        button.setAccessibilityLabel("MusicRateSwitcher，\(rate)")
-        let sourceSummary = MusicPlayerID.allCases.map(sourceTitle).joined(separator: "\n")
+        button.setAccessibilityLabel("AMSwitcher，\(rate)")
+        let sourceSummary = [MusicPlayerID.appleMusic].map(sourceTitle).joined(separator: "\n")
         button.toolTip = "\(sourceSummary)\n\(outputTitle)"
     }
 
@@ -289,6 +271,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PanelActions {
         NSApp.activate(ignoringOtherApps: true)
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()
+        nowPlaying.setVisible(true)
     }
 
     private func contextMenu() -> NSMenu {
@@ -298,8 +281,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PanelActions {
         menu.addItem(automatic)
         menu.addItem(NSMenuItem(title: "立即重新检测", action: #selector(refreshFromMenu(_:)), keyEquivalent: "r"))
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "关于 MusicRateSwitcher", action: #selector(aboutFromMenu(_:)), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "退出 MusicRateSwitcher", action: #selector(quitFromMenu(_:)), keyEquivalent: "q"))
+        menu.addItem(NSMenuItem(title: "开源许可", action: #selector(aboutFromMenu(_:)), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "退出 AMSwitcher", action: #selector(quitFromMenu(_:)), keyEquivalent: "q"))
         menu.items.forEach { $0.target = self }
         return menu
     }
@@ -351,22 +334,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PanelActions {
         if settings.autoSwitch { applyCurrentFormat(reason: "用户开启自动切换") }
     }
 
-    func setPlayer(_ player: MusicPlayerID, enabled: Bool) {
-        guard let source = sources[player], settings.isSourceEnabled(player) != enabled else { return }
-        settings.setSourceEnabled(enabled, player: player)
-        if enabled {
-            source.start()
-        } else {
-            source.stop()
-            sourceStates[player] = .appNotRunning
-            detections[player] = nil
-            if activeDetection?.player == player { choosePreferredDetection() }
-        }
-        Diagnostics.shared.info("\(player.displayName) 数据源=\(enabled)")
-        refreshUI()
-        if enabled { source.refreshNow() }
-    }
-
     func setMenuBarStyle(_ style: MenuBarStyle) {
         settings.menuBarStyle = style
         refreshUI()
@@ -380,6 +347,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PanelActions {
     }
 
     func refreshNow() {
+        nowPlaying.refresh()
         audio.refresh()
         for (player, source) in sources where settings.isSourceEnabled(player) { source.refreshNow() }
         applyCurrentFormat(reason: "用户手动刷新")
@@ -391,73 +359,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PanelActions {
         NSWorkspace.shared.openApplication(at: url, configuration: .init())
     }
 
-    /// NetEase keeps its playback cache inside its own sandbox container, which
-    /// macOS protects as "other app data": the consent dialog only lasts for
-    /// one run and the Files & Folders switch does not persist, so the file
-    /// picker grant is what we store (as a security-scoped bookmark).
-    func openNeteaseCachePicker() {
-        popover.performClose(nil)
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.canCreateDirectories = false
-        panel.prompt = "授权"
-        panel.message = "选中网易云音乐的 \(NeteaseCacheAccess.cacheFolderName) 缓存目录。MusicRateSwitcher 只读取其中的缓存文件头部，用来识别当前曲目的采样率。"
-        panel.directoryURL = NeteaseCacheAccess.defaultPickerDirectory(
-            hint: model.neteaseCacheHint.map { URL(fileURLWithPath: $0, isDirectory: true) }
-        )
-        NSApp.activate(ignoringOtherApps: true)
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+    func popoverDidClose(_ notification: Notification) { nowPlaying.setVisible(false) }
 
-        let stored = NeteaseCacheAccess.shared.grant(url)
-        Diagnostics.shared.info("已授权网易云缓存目录：\(url.path)（bookmark=\(stored ? "已保存" : "未保存")）")
-        refreshUI()
-        sources[.neteaseMusic]?.refreshNow()
-        verifyNeteaseAccess(at: url, stored: stored)
-    }
-
-    /// The picker grant applies right away. If macOS still refuses the read the
-    /// user has to fall back to Full Disk Access — say so instead of leaving a
-    /// silent "需要授权" row behind.
-    private func verifyNeteaseAccess(at url: URL, stored: Bool) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
-            guard let self else { return }
-            let readable = (try? FileManager.default.contentsOfDirectory(
-                at: url,
-                includingPropertiesForKeys: nil,
-                options: [.skipsHiddenFiles]
-            )) != nil
-            guard readable else {
-                Diagnostics.shared.warning("已选择 \(url.path)，但 macOS 仍然拒绝读取，需要完全磁盘访问权限")
-                self.showAlert(
-                    title: "系统仍然拒绝读取",
-                    message: "目录已记录，但 macOS 依然不允许访问。请在面板中点“完全磁盘访问”，把 MusicRateSwitcher 加入列表，然后退出并重新打开它。"
-                )
-                return
-            }
-            Diagnostics.shared.info("网易云缓存目录授权校验通过")
-            if !stored {
-                Diagnostics.shared.warning("该目录的授权记录未能保存，重启 App 后可能需要重新授权")
-            }
-            self.sources[.neteaseMusic]?.refreshNow()
-        }
-    }
-
-    func openFullDiskAccessSettings() {
-        popover.performClose(nil)
-        NSWorkspace.shared.open(Self.fullDiskAccessSettingsURL)
-    }
-
-    func copyNeteaseCachePath() {
-        guard let path = model.neteaseCacheHint ?? model.neteaseGrantedPath else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(path, forType: .string)
-        Diagnostics.shared.info("已复制网易云缓存路径：\(path)")
-    }
-
-    static let fullDiskAccessSettingsURL =
-        URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!
+    func transport(_ command: String) { nowPlaying.transport(command) }
 
     func openAudioMIDISetup() {
         popover.performClose(nil)
@@ -465,33 +369,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PanelActions {
         NSWorkspace.shared.openApplication(at: url, configuration: .init())
     }
 
-    func setLaunchAtLogin(_ enabled: Bool) {
-        guard #available(macOS 13.0, *), enabled != launchAtLoginEnabled else { return }
-        do {
-            if enabled { try SMAppService.mainApp.register() }
-            else { try SMAppService.mainApp.unregister() }
-        } catch {
-            Diagnostics.shared.error("登录启动设置失败：\(error.localizedDescription)")
-            showAlert(title: "无法更改登录启动", message: error.localizedDescription)
-        }
-        refreshUI()
-    }
-
-    private var launchAtLoginEnabled: Bool {
-        guard #available(macOS 13.0, *) else { return false }
-        return SMAppService.mainApp.status == .enabled
-    }
-
     func showDiagnostics() {
         popover.performClose(nil)
-        let sourceText = MusicPlayerID.allCases.map { sourceTitle(for: $0) }.joined(separator: "\n")
+        let sourceText = [MusicPlayerID.appleMusic].map { sourceTitle(for: $0) }.joined(separator: "\n")
         let deviceText = devices.map {
             "• \($0.name) [\($0.uid)]：\(SourceAudioFormat.formatRate($0.sampleRate))\($0.isDefault ? "（默认）" : "")"
         }.joined(separator: "\n")
         let text = """
         应用版本：\(model.version)
         系统：macOS \(ProcessInfo.processInfo.operatingSystemVersionString)
-        网易云缓存授权：\(NeteaseCacheAccess.shared.grantedPath ?? "未授权")
         \(sourceText)
         \(outputTitle)
         自动切换：\(settings.autoSwitch ? "开启" : "关闭")
