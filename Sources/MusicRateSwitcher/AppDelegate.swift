@@ -26,6 +26,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PanelActions, NSPopove
     private var animationFrame = 0
     private var statusFrames: [NSImage] = []
     private var statusFrameKey = ""
+    // Presentation only: never used by the sample-rate switching engine.
+    private var statusDisplayFormat: SourceAudioFormat?
     private var activityTimer: DispatchSourceTimer?
     private var outputActivity: [MusicPlayerID: Bool] = [:]
     private var signalSources: [DispatchSourceSignal] = []
@@ -261,7 +263,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PanelActions, NSPopove
 
     private func paintStatusIcon() {
         let phase: StatusItemRenderer.Phase = switching ? .switching : (outputActivity[.appleMusic] == true ? .playing : .idle)
-        let format = activeDetection?.format
+        if let format = activeDetection?.format { statusDisplayFormat = format }
+        let format = statusDisplayFormat
         let key = "\(settings.menuBarStyle.rawValue)|\(phase)|\(format?.description ?? "")"
         if key != statusFrameKey || statusFrames.isEmpty {
             statusFrameKey = key

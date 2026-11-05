@@ -14,16 +14,16 @@ enum StatusItemRenderer {
     private static let glyphWidth: CGFloat = 15
 
     static func image(style: MenuBarStyle, phase: Phase, format: SourceAudioFormat?, frame: Int = 0) -> NSImage {
-        guard let format, phase != .idle, style != .icon else {
+        guard let format, style != .icon else {
             return glyphOnly(lively: phase != .idle, frame: frame)
         }
         switch style {
         case .icon:
             return glyphOnly(lively: true, frame: frame)
         case .compact:
-            return compact(format: format, outlined: phase == .switching, frame: frame)
+            return compact(format: format, outlined: phase == .switching, lively: phase != .idle, frame: frame)
         case .detailed:
-            return detailed(format: format, outlined: phase == .switching, frame: frame)
+            return detailed(format: format, outlined: phase == .switching, lively: phase != .idle, frame: frame)
         }
     }
 
@@ -36,7 +36,7 @@ enum StatusItemRenderer {
     }
 
     /// A filled capsule with the rate knocked out of it: `[ 96 kHz ]`.
-    private static func compact(format: SourceAudioFormat, outlined: Bool, frame: Int) -> NSImage {
+    private static func compact(format: SourceAudioFormat, outlined: Bool, lively: Bool, frame: Int) -> NSImage {
         let number = SourceAudioFormat.rateNumber(format.sampleRate)
         let numberFont = NSFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .bold)
         let unitFont = NSFont.systemFont(ofSize: 8.5, weight: .semibold)
@@ -45,11 +45,13 @@ enum StatusItemRenderer {
             .font: unitFont, .foregroundColor: NSColor.black, .baselineOffset: 0.5
         ]))
         let textSize = text.size()
-        let capsuleWidth = ceil(textSize.width) + 12
+        let reference = NSMutableAttributedString(string: "352.8", attributes: [.font: numberFont])
+        reference.append(NSAttributedString(string: " kHz", attributes: [.font: unitFont]))
+        let capsuleWidth = ceil(max(textSize.width, reference.size().width)) + 12
         let width = glyphWidth + 4 + capsuleWidth + 1
 
         return makeImage(width: width) { context in
-            drawGlyph(in: NSRect(x: 0, y: 0, width: glyphWidth, height: height), lively: true, frame: frame)
+            drawGlyph(in: NSRect(x: 0, y: 0, width: glyphWidth, height: height), lively: lively, frame: frame)
             let capsule = NSRect(x: glyphWidth + 4, y: 3.5, width: capsuleWidth, height: height - 7)
             let path = NSBezierPath(roundedRect: capsule, xRadius: 4.5, yRadius: 4.5)
             let origin = NSPoint(x: capsule.midX - textSize.width / 2, y: capsule.midY - textSize.height / 2 + 0.5)
@@ -69,7 +71,7 @@ enum StatusItemRenderer {
     }
 
     /// Two stacked lines: rate on top, bit depth and codec underneath.
-    private static func detailed(format: SourceAudioFormat, outlined: Bool, frame: Int) -> NSImage {
+    private static func detailed(format: SourceAudioFormat, outlined: Bool, lively: Bool, frame: Int) -> NSImage {
         let top = NSAttributedString(
             string: SourceAudioFormat.formatRate(format.sampleRate),
             attributes: [
@@ -88,11 +90,13 @@ enum StatusItemRenderer {
                 .kern: 0.3
             ]
         )
-        let textWidth = ceil(max(top.size().width, bottom.size().width))
+        let referenceTop = NSAttributedString(string: "352.8 kHz", attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 9.5, weight: .bold)])
+        let referenceBottom = NSAttributedString(string: "32-BIT · ALAC", attributes: [.font: NSFont.systemFont(ofSize: 7.5, weight: .semibold), .kern: 0.3])
+        let textWidth = ceil(max(max(top.size().width, bottom.size().width), max(referenceTop.size().width, referenceBottom.size().width)))
         let width = glyphWidth + 5 + textWidth + 1
 
         return makeImage(width: width) { _ in
-            drawGlyph(in: NSRect(x: 0, y: 0, width: glyphWidth, height: height), lively: !outlined, frame: frame)
+            drawGlyph(in: NSRect(x: 0, y: 0, width: glyphWidth, height: height), lively: lively, frame: frame)
             let x = glyphWidth + 5
             top.draw(at: NSPoint(x: x, y: 10))
             bottom.draw(at: NSPoint(x: x, y: 1.5))

@@ -12,7 +12,13 @@ enum PlaybackChecks {
             let idleA = StatusItemRenderer.image(style: style, phase: .idle, format: format, frame: 0)
             let idleB = StatusItemRenderer.image(style: style, phase: .idle, format: format, frame: 5)
             guard a.size == b.size, a.tiffRepresentation != b.tiffRepresentation,
-                  idleA.tiffRepresentation == idleB.tiffRepresentation else { return false }
+                  idleA.tiffRepresentation == idleB.tiffRepresentation,
+                  idleA.size == a.size else { return false }
+            for rate in [44_100.0, 48_000, 96_000, 192_000, 352_800] {
+                let other = SourceAudioFormat(sampleRate: rate, bitDepth: 16, channels: 2, codec: "ALAC")
+                let image = StatusItemRenderer.image(style: style, phase: .playing, format: other)
+                guard image.size == a.size else { return false }
+            }
         }
         return true
     }
