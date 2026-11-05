@@ -2,7 +2,8 @@ import AppKit
 import ImageIO
 
 /// Optional presentation layer. Audio-format detection never depends on it.
-/// No periodic metadata polling: refresh on panel open, player notification or user action.
+/// Artwork refreshes on panel open, player notification or user action.
+/// A lightweight position check runs only while the panel is visible.
 final class AppleMusicNowPlaying {
     private weak var model: PanelModel?
     private var visible = false
@@ -13,6 +14,11 @@ final class AppleMusicNowPlaying {
     private var lastTrackKey: String?
     private var reading = false
     private var needsRefresh = false
+    private var progressTimer: Timer?
+    private var anchorPosition: Double = 0
+    private var anchorTime = ProcessInfo.processInfo.systemUptime
+    private var lastPositionRead: Double = 0
+    private var positionReading = false
 
     init(model: PanelModel) {
         self.model = model
@@ -26,6 +32,7 @@ final class AppleMusicNowPlaying {
                 self.lastTrackKey = key
                 self.generation += 1
                 self.model?.artwork = nil
+                self.resetProgress()
                 self.model?.trackTitle = info["Name"] as? String ?? "Apple Music"
                 self.model?.trackArtist = info["Artist"] as? String ?? "歌曲信息暂不可用"
             }
@@ -47,13 +54,21 @@ final class AppleMusicNowPlaying {
         notificationToken = nil
         exitToken = nil
         generation += 1
+        progressTimer?.invalidate()
+        progressTimer = nil
     }
     deinit { stop() }
 
     func setVisible(_ value: Bool) {
         visible = value
-        if value { refresh() }
-        else { generation += 1 }
+        progressTimer?.invalidate()
+        progressTimer = nil
+        if value {
+            refresh()
+            let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in self?.tickProgress() }
+            RunLoop.main.add(timer, forMode: .common)
+            progressTimer = timer
+        } else { generation += 1 }
     }
 
     private func clear() {
@@ -65,6 +80,7 @@ final class AppleMusicNowPlaying {
         model?.isPlaying = false
         model?.canControlPlayback = false
         model?.metadataHint = nil
+        resetProgress()
     }
 
     func refresh() {
@@ -90,6 +106,14 @@ final class AppleMusicNowPlaying {
                     set titleText to name of t
                     set artistText to artist of t
                     set albumText to album of t
+                    set durationText to "-1"
+                    set positionText to "-1"
+                    set identityText to ""
+                    try
+                        set identityText to persistent ID of t as text
+                        set durationText to duration of t as text
+                        set positionText to player position as text
+                    end try
                     try
                         set imageBytes to raw data of artwork 1 of t
                         set f to open for access POSIX file "\(art.path)" with write permission
@@ -99,7 +123,7 @@ final class AppleMusicNowPlaying {
                         end try
                         close access f
                     end try
-                    return titleText & (ASCII character 31) & artistText & (ASCII character 31) & albumText & (ASCII character 31) & playbackState
+                    return titleText & (ASCII character 31) & artistText & (ASCII character 31) & albumText & (ASCII character 31) & playbackState & (ASCII character 31) & durationText & (ASCII character 31) & positionText & (ASCII character 31) & identityText
                 end tell
             end timeout
             """
@@ -120,20 +144,136 @@ final class AppleMusicNowPlaying {
                 self.reading = false
                 if self.visible && request == self.generation {
                     let parts = result.text.trimmingCharacters(in: .newlines).components(separatedBy: "\u{1f}")
-                    if result.success && parts.count == 4 {
+                    if result.success && parts.count == 7 {
                         self.model?.trackTitle = parts[0]
                         self.model?.trackArtist = [parts[1], parts[2]].filter { !$0.isEmpty }.joined(separator: " · ")
                         self.model?.isPlaying = parts[3] == "playing"
                         self.model?.canControlPlayback = true
                         self.model?.artwork = cover
+                        self.acceptProgress(duration: Self.number(parts[4]), position: Self.number(parts[5]), identity: parts[6])
                         self.model?.metadataHint = cover == nil ? "此曲目暂无可读取封面" : nil
                     } else {
                         self.model?.artwork = nil
                         self.model?.canControlPlayback = false
+                        self.resetProgress()
                         self.model?.metadataHint = "歌曲信息暂不可用 · 不影响采样率匹配"
                     }
                 }
                 if self.needsRefresh && self.visible { self.refresh() }
+            }
+        }
+    }
+
+    private static func number(_ text: String) -> Double {
+        Double(text.replacingOccurrences(of: ",", with: ".")) ?? -1
+    }
+
+    private static func validID(_ identity: String) -> Bool {
+        identity.count == 16 && identity.allSatisfy { $0.isHexDigit }
+    }
+
+    private func resetProgress() {
+        model?.trackID = ""
+        model?.trackDuration = 0
+        model?.playbackPosition = 0
+        model?.canSeek = false
+        anchorPosition = 0
+        anchorTime = ProcessInfo.processInfo.systemUptime
+    }
+
+    private func acceptProgress(duration: Double, position: Double, identity: String) {
+        guard duration.isFinite, position.isFinite, duration > 0, position >= 0, Self.validID(identity) else {
+            resetProgress()
+            return
+        }
+        model?.trackID = identity
+        model?.trackDuration = duration
+        model?.canSeek = true
+        anchorPosition = min(duration, position)
+        anchorTime = ProcessInfo.processInfo.systemUptime
+        lastPositionRead = anchorTime
+        model?.playbackPosition = anchorPosition
+    }
+
+    private func tickProgress() {
+        guard visible, let model, model.canSeek else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        if model.isPlaying { model.playbackPosition = min(model.trackDuration, anchorPosition + max(0, now - anchorTime)) }
+        if now - lastPositionRead >= 4 { readPosition() }
+    }
+
+    private func readPosition() {
+        guard visible, !positionReading, let model, Self.validID(model.trackID) else { return }
+        positionReading = true
+        lastPositionRead = ProcessInfo.processInfo.systemUptime
+        let request = generation
+        worker.async { [weak self] in
+            let script = """
+            with timeout of 5 seconds
+                tell application id "com.apple.Music"
+                    set t to current track
+                    return (persistent ID of t as text) & (ASCII character 31) & (duration of t as text) & (ASCII character 31) & (player position as text) & (ASCII character 31) & (player state as text)
+                end tell
+            end timeout
+            """
+            let result = Self.run(script)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.positionReading = false
+                guard self.visible, request == self.generation else { return }
+                let parts = result.text.trimmingCharacters(in: .newlines).components(separatedBy: "\u{1f}")
+                guard result.success, parts.count == 4 else {
+                    self.resetProgress()
+                    return
+                }
+                guard parts[0] == self.model?.trackID else {
+                    self.generation += 1
+                    self.model?.artwork = nil
+                    self.resetProgress()
+                    self.refresh()
+                    return
+                }
+                self.model?.isPlaying = parts[3] == "playing"
+                self.acceptProgress(duration: Self.number(parts[1]), position: Self.number(parts[2]), identity: parts[0])
+            }
+        }
+    }
+
+    func seek(to seconds: Double, trackID: String) {
+        guard seconds.isFinite, let model, model.canSeek, trackID == model.trackID,
+              Self.validID(trackID), model.trackDuration > 0 else { return }
+        let target = min(max(0, seconds), max(0, model.trackDuration - 0.1))
+        generation += 1
+        let request = generation
+        anchorPosition = target
+        anchorTime = ProcessInfo.processInfo.systemUptime
+        model.playbackPosition = target
+        worker.async { [weak self] in
+            let script = """
+            with timeout of 5 seconds
+                tell application id "com.apple.Music"
+                    set t to current track
+                    if (persistent ID of t as text) is not "\(trackID)" then error "Track changed"
+                    set d to duration of t
+                    set targetPosition to \(String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), target))
+                    if targetPosition > d then set targetPosition to d
+                    set player position to targetPosition
+                    return player position as text
+                end tell
+            end timeout
+            """
+            let result = Self.run(script)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, request == self.generation, self.model?.trackID == trackID else { return }
+                let actual = Self.number(result.text.trimmingCharacters(in: .whitespacesAndNewlines))
+                if result.success && actual.isFinite && actual >= 0 {
+                    self.anchorPosition = actual
+                    self.anchorTime = ProcessInfo.processInfo.systemUptime
+                    self.model?.playbackPosition = actual
+                } else {
+                    self.model?.metadataHint = "此曲目暂时无法跳转进度"
+                }
+                self.readPosition()
             }
         }
     }

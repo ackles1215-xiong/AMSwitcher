@@ -15,6 +15,7 @@ protocol PanelActions: AnyObject {
     func copyDiagnostics()
     func showAbout()
     func transport(_ command: String)
+    func seek(to seconds: Double, trackID: String)
     func quit()
 }
 
@@ -64,6 +65,10 @@ final class PanelModel: ObservableObject {
         didSet { artworkPalette = artwork.flatMap(Self.makePalette) ?? Self.defaultPalette }
     }
     @Published private(set) var artworkPalette: [NSColor] = PanelModel.defaultPalette
+    @Published var playbackPosition: Double = 0
+    @Published var trackDuration: Double = 0
+    @Published var trackID = ""
+    @Published var canSeek = false
     @Published var isPlaying = false
     @Published var canControlPlayback = false
     @Published var metadataHint: String?

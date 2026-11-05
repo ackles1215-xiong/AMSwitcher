@@ -10,7 +10,7 @@ if let index = CommandLine.arguments.firstIndex(of: "--metadata-check"), index +
     let audio = CoreAudioController()
     model.devices = audio.outputDevices()
     model.selectedDevice = model.devices.first(where: \.isDefault)
-    model.version = "1.4.0"
+    model.version = "1.4.1"
     let source = AppleMusicPlaybackMonitor()
     source.onFormatChanged = { detection in
         DispatchQueue.main.async {
@@ -30,11 +30,17 @@ if let index = CommandLine.arguments.firstIndex(of: "--metadata-check"), index +
     let output = URL(fileURLWithPath: CommandLine.arguments[index + 1])
     try? FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
     SnapshotRenderer.render(PanelView(model: model), to: output.appendingPathComponent("panel-live.png"), appearance: .darkAqua)
-    print("Metadata=\(model.trackTitle != "Apple Music"); artwork=\(model.artwork != nil); boundedArtwork=\((model.artwork?.size.width ?? 0) <= 512); gradientPalette=\(model.artworkPalette.count == 2); controls=\(model.canControlPlayback)")
+    print("Metadata=\(model.trackTitle != "Apple Music"); artwork=\(model.artwork != nil); boundedArtwork=\((model.artwork?.size.width ?? 0) <= 512); gradientPalette=\(model.artworkPalette.count == 2); controls=\(model.canControlPlayback); seekable=\(model.canSeek); position=\(model.playbackPosition); duration=\(model.trackDuration)")
+    let framesOK = PlaybackChecks.checkFrames()
+    print("Animated frames differ; idle frames stay fixed: \(framesOK)")
+    var seekOK = true
+    if CommandLine.arguments.contains("--seek-check") {
+        seekOK = PlaybackChecks.seekRoundtrip(monitor: monitor, model: model)
+    }
     monitor.setVisible(false)
     monitor.stop()
     source.stop()
-    exit(model.artwork != nil && model.canControlPlayback ? 0 : 2)
+    exit(model.artwork != nil && model.canControlPlayback && framesOK && seekOK ? 0 : 2)
 }
 if let index = CommandLine.arguments.firstIndex(of: "--snapshot"), index + 1 < CommandLine.arguments.count {
     application.setActivationPolicy(.accessory)

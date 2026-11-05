@@ -53,6 +53,10 @@ enum SnapshotRenderer {
         model.trackArtist = playing ? "示例歌曲 · 专辑封面预览" : "开始播放，自动匹配采样率"
         model.isPlaying = playing
         model.canControlPlayback = playing
+        model.canSeek = playing
+        model.trackDuration = playing ? 234 : 0
+        model.playbackPosition = playing ? 83 : 0
+        model.trackID = playing ? "0000000000000001" : ""
         if playing {
             model.artwork = ProcessInfo.processInfo.environment["MRS_PREVIEW_ART"].flatMap { NSImage(contentsOfFile: $0) }
         }

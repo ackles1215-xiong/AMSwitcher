@@ -13,30 +13,30 @@ enum StatusItemRenderer {
     private static let height: CGFloat = 22
     private static let glyphWidth: CGFloat = 15
 
-    static func image(style: MenuBarStyle, phase: Phase, format: SourceAudioFormat?) -> NSImage {
+    static func image(style: MenuBarStyle, phase: Phase, format: SourceAudioFormat?, frame: Int = 0) -> NSImage {
         guard let format, phase != .idle, style != .icon else {
-            return glyphOnly(lively: phase != .idle)
+            return glyphOnly(lively: phase != .idle, frame: frame)
         }
         switch style {
         case .icon:
-            return glyphOnly(lively: true)
+            return glyphOnly(lively: true, frame: frame)
         case .compact:
-            return compact(format: format, outlined: phase == .switching)
+            return compact(format: format, outlined: phase == .switching, frame: frame)
         case .detailed:
-            return detailed(format: format, outlined: phase == .switching)
+            return detailed(format: format, outlined: phase == .switching, frame: frame)
         }
     }
 
     // MARK: - Styles
 
-    private static func glyphOnly(lively: Bool) -> NSImage {
+    private static func glyphOnly(lively: Bool, frame: Int) -> NSImage {
         makeImage(width: glyphWidth + 2) { _ in
-            drawGlyph(in: NSRect(x: 1, y: 0, width: glyphWidth, height: height), lively: lively)
+            drawGlyph(in: NSRect(x: 1, y: 0, width: glyphWidth, height: height), lively: lively, frame: frame)
         }
     }
 
     /// A filled capsule with the rate knocked out of it: `[ 96 kHz ]`.
-    private static func compact(format: SourceAudioFormat, outlined: Bool) -> NSImage {
+    private static func compact(format: SourceAudioFormat, outlined: Bool, frame: Int) -> NSImage {
         let number = SourceAudioFormat.rateNumber(format.sampleRate)
         let numberFont = NSFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .bold)
         let unitFont = NSFont.systemFont(ofSize: 8.5, weight: .semibold)
@@ -49,7 +49,7 @@ enum StatusItemRenderer {
         let width = glyphWidth + 4 + capsuleWidth + 1
 
         return makeImage(width: width) { context in
-            drawGlyph(in: NSRect(x: 0, y: 0, width: glyphWidth, height: height), lively: true)
+            drawGlyph(in: NSRect(x: 0, y: 0, width: glyphWidth, height: height), lively: true, frame: frame)
             let capsule = NSRect(x: glyphWidth + 4, y: 3.5, width: capsuleWidth, height: height - 7)
             let path = NSBezierPath(roundedRect: capsule, xRadius: 4.5, yRadius: 4.5)
             let origin = NSPoint(x: capsule.midX - textSize.width / 2, y: capsule.midY - textSize.height / 2 + 0.5)
@@ -69,7 +69,7 @@ enum StatusItemRenderer {
     }
 
     /// Two stacked lines: rate on top, bit depth and codec underneath.
-    private static func detailed(format: SourceAudioFormat, outlined: Bool) -> NSImage {
+    private static func detailed(format: SourceAudioFormat, outlined: Bool, frame: Int) -> NSImage {
         let top = NSAttributedString(
             string: SourceAudioFormat.formatRate(format.sampleRate),
             attributes: [
@@ -92,7 +92,7 @@ enum StatusItemRenderer {
         let width = glyphWidth + 5 + textWidth + 1
 
         return makeImage(width: width) { _ in
-            drawGlyph(in: NSRect(x: 0, y: 0, width: glyphWidth, height: height), lively: !outlined)
+            drawGlyph(in: NSRect(x: 0, y: 0, width: glyphWidth, height: height), lively: !outlined, frame: frame)
             let x = glyphWidth + 5
             top.draw(at: NSPoint(x: x, y: 10))
             bottom.draw(at: NSPoint(x: x, y: 1.5))
@@ -102,8 +102,15 @@ enum StatusItemRenderer {
     // MARK: - Drawing helpers
 
     /// Five rounded bars echoing the app icon's waveform.
-    private static func drawGlyph(in rect: NSRect, lively: Bool) {
-        let heights: [CGFloat] = lively ? [0.36, 0.7, 1.0, 0.62, 0.3] : [0.22, 0.34, 0.46, 0.34, 0.22]
+    private static func drawGlyph(in rect: NSRect, lively: Bool, frame: Int) {
+        var heights: [CGFloat] = [0.22, 0.34, 0.46, 0.34, 0.22]
+        if lively {
+            let time = Double(frame % 24) * Double.pi / 12.0
+            for index in heights.indices {
+                let wave = abs(sin(time + Double(index) * 0.9))
+                heights[index] = CGFloat(0.22 + 0.78 * wave)
+            }
+        }
         let barWidth: CGFloat = 2
         let gap = (rect.width - barWidth * CGFloat(heights.count)) / CGFloat(heights.count - 1)
         let maxHeight = rect.height - 8

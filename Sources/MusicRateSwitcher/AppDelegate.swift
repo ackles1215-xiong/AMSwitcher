@@ -22,6 +22,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PanelActions, NSPopove
     private var devices: [AudioOutputDevice] = []
     private var switching = false
     private var pendingApply = false
+    private var animationTimer: DispatchSourceTimer?
+    private var animationFrame = 0
+    private var statusFrames: [NSImage] = []
+    private var statusFrameKey = ""
     private var activityTimer: DispatchSourceTimer?
     private var outputActivity: [MusicPlayerID: Bool] = [:]
     private var signalSources: [DispatchSourceSignal] = []
@@ -65,6 +69,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PanelActions, NSPopove
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        animationTimer?.cancel()
+        animationTimer = nil
         activityTimer?.cancel()
         activityTimer = nil
         sources.values.forEach { $0.stop() }
@@ -142,6 +148,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PanelActions, NSPopove
         }
         outputActivity = refreshed
         choosePreferredDetection()
+        updateAnimation(playing: refreshed[.appleMusic] == true)
 
         if refreshed != previousActivity {
             let audible = refreshed.filter(\.value).keys.map(\.displayName).sorted().joined(separator: "、")
@@ -231,13 +238,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PanelActions, NSPopove
         return "输出：\(device.name) · \(SourceAudioFormat.formatRate(device.sampleRate))"
     }
 
+    private func updateAnimation(playing: Bool) {
+        if playing {
+            guard animationTimer == nil else { return }
+            let timer = DispatchSource.makeTimerSource(queue: .main)
+            timer.schedule(deadline: .now(), repeating: 0.2, leeway: .milliseconds(30))
+            timer.setEventHandler { [weak self] in
+                guard let self else { return }
+                self.animationFrame = (self.animationFrame + 1) % 24
+                // Only repaint the tiny icon; avoid publishing the whole panel or rebuilding tooltips.
+                self.paintStatusIcon()
+            }
+            animationTimer = timer
+            timer.resume()
+        } else {
+            animationTimer?.cancel()
+            animationTimer = nil
+            animationFrame = 0
+            paintStatusIcon()
+        }
+    }
+
+    private func paintStatusIcon() {
+        let phase: StatusItemRenderer.Phase = switching ? .switching : (outputActivity[.appleMusic] == true ? .playing : .idle)
+        let format = activeDetection?.format
+        let key = "\(settings.menuBarStyle.rawValue)|\(phase)|\(format?.description ?? "")"
+        if key != statusFrameKey || statusFrames.isEmpty {
+            statusFrameKey = key
+            let count = phase == .idle ? 1 : 24
+            statusFrames = (0..<count).map { frame in
+                let image = StatusItemRenderer.image(style: settings.menuBarStyle, phase: phase, format: format, frame: frame)
+                // Rasterize once per style/format; the animation only selects cached frames.
+                if let data = image.tiffRepresentation, let cached = NSImage(data: data) {
+                    cached.isTemplate = true
+                    return cached
+                }
+                return image
+            }
+        }
+        statusItem.button?.image = statusFrames[animationFrame % statusFrames.count]
+    }
+
     private func updateStatusButton() {
         guard let button = statusItem.button else { return }
-        let phase: StatusItemRenderer.Phase
-        if activeDetection == nil { phase = .idle }
-        else if switching { phase = .switching }
-        else { phase = .playing }
-        button.image = StatusItemRenderer.image(style: settings.menuBarStyle, phase: phase, format: activeDetection?.format)
+        paintStatusIcon()
         button.title = ""
         button.imagePosition = .imageOnly
         let rate = activeDetection.map { SourceAudioFormat.formatRate($0.format.sampleRate) } ?? "等待播放"
@@ -362,6 +406,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PanelActions, NSPopove
     func popoverDidClose(_ notification: Notification) { nowPlaying.setVisible(false) }
 
     func transport(_ command: String) { nowPlaying.transport(command) }
+
+    func seek(to seconds: Double, trackID: String) { nowPlaying.seek(to: seconds, trackID: trackID) }
 
     func openAudioMIDISetup() {
         popover.performClose(nil)

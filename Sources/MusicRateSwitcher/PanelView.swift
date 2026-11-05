@@ -117,57 +117,71 @@ private struct NowPlayingCard: View {
     @ObservedObject var model: PanelModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Label("APPLE MUSIC", systemImage: "music.note")
                     .font(.system(size: 9, weight: .bold)).tracking(1.5)
                 Spacer()
                 SyncBadge(sync: model.sync, automatic: model.autoSwitch, hasSource: model.activeDetection != nil)
-            }
-            .foregroundStyle(.white.opacity(0.8))
-            HStack(alignment: .center, spacing: 14) {
-                artwork.frame(width: 94, height: 94)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                    .shadow(color: .black.opacity(0.25), radius: 10, y: 5)
+            }.foregroundStyle(.white.opacity(0.8))
+
+            HStack(spacing: 14) {
+                artwork.frame(width: 104, height: 104)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .shadow(color: .black.opacity(0.2), radius: 8, y: 4)
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(model.trackTitle).font(.system(size: 18, weight: .semibold))
-                        .lineLimit(2)
+                    Text(model.trackTitle).font(.system(size: 17, weight: .semibold))
+                        .lineLimit(2).fixedSize(horizontal: false, vertical: true)
                     Text(model.trackArtist).font(.system(size: 11))
-                        .foregroundStyle(.white.opacity(0.7)).lineLimit(2)
-                    HStack(spacing: 22) {
+                        .foregroundStyle(.white.opacity(0.65)).lineLimit(1)
+                    HStack(spacing: 24) {
                         transport("backward.end.fill", command: "previous track", label: "上一首")
                         transport(model.isPlaying ? "pause.fill" : "play.fill", command: "playpause", label: model.isPlaying ? "暂停" : "播放")
                         transport("forward.end.fill", command: "next track", label: "下一首")
-                    }
-                    .padding(.top, 8)
-                    .disabled(!model.canControlPlayback)
+                    }.padding(.top, 8).disabled(!model.canControlPlayback)
                 }
                 Spacer(minLength: 0)
             }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 14).fill(Color(red: 0.055, green: 0.065, blue: 0.095).opacity(0.94)))
-            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.white.opacity(0.08), lineWidth: 0.5))
+
+            PlaybackProgress(model: model)
+
             if let hint = model.metadataHint {
                 Text(hint).font(.system(size: 10)).foregroundStyle(.white.opacity(0.65))
             }
-            HStack(spacing: 6) {
-                Text(model.activeDetection.map { $0.format.description } ?? "等待识别实际播放格式")
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .lineLimit(1).minimumScaleFactor(0.8)
-                Spacer(minLength: 0)
+
+            Rectangle().fill(.white.opacity(0.12)).frame(height: 0.5)
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(model.activeDetection.map { "源 · " + SourceAudioFormat.formatRate($0.format.sampleRate) } ?? "等待识别")
+                        .font(.system(size: 13, weight: .semibold)).monospacedDigit()
+                    Text(model.activeDetection.map { formatDetail($0.format) } ?? "实际播放格式")
+                        .font(.system(size: 9)).foregroundStyle(.white.opacity(0.6))
+                }.frame(maxWidth: .infinity, alignment: .leading)
+                Image(systemName: "arrow.right").font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.45))
+                VStack(alignment: .trailing, spacing: 4) {
+                    Text(model.selectedDevice?.name ?? "无输出设备")
+                        .font(.system(size: 9)).foregroundStyle(.white.opacity(0.5)).lineLimit(1)
+                    Text(model.selectedDevice.map { SourceAudioFormat.formatRate($0.sampleRate) } ?? "—")
+                        .font(.system(size: 13, weight: .semibold)).monospacedDigit()
+                }.frame(maxWidth: .infinity, alignment: .trailing)
             }
-            .foregroundStyle(.white.opacity(0.8))
-            SignalPath(model: model)
         }
         .padding(16)
         .foregroundStyle(.white)
         .background {
-            LinearGradient(colors: model.artworkPalette.map { Color(nsColor: $0) } + [Palette.navy], startPoint: .topLeading, endPoint: .bottomTrailing)
+            ZStack {
+                LinearGradient(colors: model.artworkPalette.map { Color(nsColor: $0) } + [Palette.navy], startPoint: .topLeading, endPoint: .bottomTrailing)
+                Color.black.opacity(0.28)
+            }
         }
         .clipShape(RoundedRectangle(cornerRadius: 18))
         .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(.white.opacity(0.12), lineWidth: 0.75))
         .environment(\.colorScheme, .dark)
+    }
+
+    private func formatDetail(_ format: SourceAudioFormat) -> String {
+        ([format.bitDepth.map { "\($0)-bit" }, format.codec].compactMap { $0 }).joined(separator: " · ")
     }
 
     @ViewBuilder private var artwork: some View {
@@ -176,7 +190,7 @@ private struct NowPlayingCard: View {
         } else {
             ZStack {
                 LinearGradient(colors: [.pink.opacity(0.8), Palette.deepBlue], startPoint: .topLeading, endPoint: .bottomTrailing)
-                Image(systemName: "music.note").font(.system(size: 38, weight: .medium))
+                Image(systemName: "music.note").font(.system(size: 34, weight: .medium))
                     .foregroundStyle(.white.opacity(0.85))
             }
         }
@@ -184,9 +198,61 @@ private struct NowPlayingCard: View {
 
     private func transport(_ symbol: String, command: String, label: String) -> some View {
         Button { model.actions?.transport(command) } label: {
-            Image(systemName: symbol).font(.system(size: 17, weight: .semibold))
-                .frame(width: 24, height: 24).contentShape(Rectangle())
+            Image(systemName: symbol).font(.system(size: 19, weight: .semibold))
+                .frame(width: 24, height: 26).contentShape(Rectangle())
         }.buttonStyle(.plain).help(label).accessibilityLabel(label)
+    }
+}
+
+private final class SeekState: ObservableObject {
+    @Published var dragging = false
+    @Published var draft: Double = 0
+    var trackID = ""
+}
+
+private struct PlaybackProgress: View {
+    @ObservedObject var model: PanelModel
+    @StateObject private var seekState = SeekState()
+
+    private var position: Double {
+        min(max(0, seekState.dragging ? seekState.draft : model.playbackPosition), max(0, model.trackDuration))
+    }
+
+    var body: some View {
+        VStack(spacing: 2) {
+            Slider(value: Binding(
+                get: { position },
+                set: { seekState.draft = $0 }
+            ), in: 0...max(1, model.trackDuration), onEditingChanged: { editing in
+                if editing {
+                    seekState.draft = model.playbackPosition
+                    seekState.trackID = model.trackID
+                    seekState.dragging = true
+                } else {
+                    if seekState.trackID == model.trackID {
+                        model.actions?.seek(to: seekState.draft, trackID: seekState.trackID)
+                    }
+                    seekState.dragging = false
+                }
+            })
+            .tint(.white.opacity(0.9))
+            .controlSize(.small)
+            .disabled(!model.canSeek)
+            .accessibilityLabel("播放进度")
+            .accessibilityValue("\(time(position))，共 \(time(model.trackDuration))")
+            HStack {
+                Text(model.canSeek ? time(position) : "--:--")
+                Spacer()
+                Text(model.canSeek ? "−" + time(max(0, model.trackDuration - position)) : "--:--")
+            }
+            .font(.system(size: 9, design: .rounded)).monospacedDigit()
+            .foregroundStyle(.white.opacity(0.55))
+        }
+    }
+
+    private func time(_ seconds: Double) -> String {
+        let value = Int(max(0, seconds.isFinite ? seconds : 0))
+        return String(format: "%d:%02d", value / 60, value % 60)
     }
 }
 
