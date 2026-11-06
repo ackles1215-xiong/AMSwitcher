@@ -19,6 +19,10 @@ final class AppleMusicNowPlaying {
     private var anchorTime = ProcessInfo.processInfo.systemUptime
     private var lastPositionRead: Double = 0
     private var positionReading = false
+    private var progressInterval: TimeInterval = 0
+    private var cachedArtworkID = ""
+    private(set) var artworkReadCount = 0
+    private(set) var artworkCacheHitCount = 0
 
     init(model: PanelModel) {
         self.model = model
@@ -27,16 +31,19 @@ final class AppleMusicNowPlaying {
         ) { [weak self] note in
             guard let self else { return }
             let info = note.userInfo ?? [:]
-            let key = "\(info["PersistentID"] ?? "")|\(info["Name"] ?? "")|\(info["Artist"] ?? "")|\(info["Album"] ?? "")"
+            let key = "\(info["Name"] ?? "")|\(info["Artist"] ?? "")|\(info["Album"] ?? "")"
             if key != self.lastTrackKey {
                 self.lastTrackKey = key
                 self.generation += 1
-                self.model?.artwork = nil
+                self.cachedArtworkID = ""
+                if self.model?.artwork != nil { self.model?.artwork = nil }
                 self.resetProgress()
                 self.model?.trackTitle = info["Name"] as? String ?? "Apple Music"
                 self.model?.trackArtist = info["Artist"] as? String ?? "歌曲信息暂不可用"
             }
-            self.model?.isPlaying = (info["Player State"] as? String) == "Playing"
+            let playing = (info["Player State"] as? String) == "Playing"
+            if self.model?.isPlaying != playing { self.model?.isPlaying = playing }
+            self.updateProgressTimer()
             if self.visible { self.refresh() }
         }
         exitToken = NSWorkspace.shared.notificationCenter.addObserver(
@@ -61,19 +68,28 @@ final class AppleMusicNowPlaying {
 
     func setVisible(_ value: Bool) {
         visible = value
+        if value { refresh() }
+        else { generation += 1 }
+        updateProgressTimer()
+    }
+
+    private func updateProgressTimer() {
+        let interval: TimeInterval = visible && model?.canSeek == true ? (model?.isPlaying == true ? 0.5 : 4) : 0
+        guard interval != progressInterval else { return }
         progressTimer?.invalidate()
         progressTimer = nil
-        if value {
-            refresh()
-            let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in self?.tickProgress() }
-            RunLoop.main.add(timer, forMode: .common)
-            progressTimer = timer
-        } else { generation += 1 }
+        progressInterval = interval
+        guard interval > 0 else { return }
+        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in self?.tickProgress() }
+        timer.tolerance = interval == 0.5 ? 0.1 : 0.5
+        RunLoop.main.add(timer, forMode: .common)
+        progressTimer = timer
     }
 
     private func clear() {
         generation += 1
         lastTrackKey = nil
+        cachedArtworkID = ""
         model?.trackTitle = "Apple Music"
         model?.trackArtist = "打开 Apple Music，开始聆听"
         model?.artwork = nil
@@ -93,6 +109,7 @@ final class AppleMusicNowPlaying {
         reading = true
         needsRefresh = false
         let request = generation
+        let cachedID = model?.artwork != nil && Self.validID(cachedArtworkID) ? cachedArtworkID : ""
         worker.async { [weak self] in
             let folder = FileManager.default.temporaryDirectory.appendingPathComponent("mrs-art-\(UUID().uuidString)", isDirectory: true)
             try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -114,23 +131,30 @@ final class AppleMusicNowPlaying {
                         set durationText to duration of t as text
                         set positionText to player position as text
                     end try
-                    try
-                        set imageBytes to raw data of artwork 1 of t
-                        set f to open for access POSIX file "\(art.path)" with write permission
+                    set artworkState to "missing"
+                    if identityText is not "" and identityText is "\(cachedID)" then
+                        set artworkState to "cached"
+                    else
                         try
-                            set eof f to 0
-                            write imageBytes to f
+                            set imageBytes to raw data of artwork 1 of t
+                            set f to open for access POSIX file "\(art.path)" with write permission
+                            try
+                                set eof f to 0
+                                write imageBytes to f
+                                set artworkState to "loaded"
+                            end try
+                            close access f
                         end try
-                        close access f
-                    end try
-                    return titleText & (ASCII character 31) & artistText & (ASCII character 31) & albumText & (ASCII character 31) & playbackState & (ASCII character 31) & durationText & (ASCII character 31) & positionText & (ASCII character 31) & identityText
+                    end if
+                    return titleText & (ASCII character 31) & artistText & (ASCII character 31) & albumText & (ASCII character 31) & playbackState & (ASCII character 31) & durationText & (ASCII character 31) & positionText & (ASCII character 31) & identityText & (ASCII character 31) & artworkState
                 end tell
             end timeout
             """
             let result = Self.run(script)
             var image: NSImage?
             // Bound decoded artwork memory regardless of the embedded cover resolution.
-            if let source = CGImageSourceCreateWithURL(art as CFURL, nil),
+            if FileManager.default.fileExists(atPath: art.path),
+               let source = CGImageSourceCreateWithURL(art as CFURL, nil),
                let thumb = CGImageSourceCreateThumbnailAtIndex(source, 0, [
                    kCGImageSourceCreateThumbnailFromImageAlways: true,
                    kCGImageSourceThumbnailMaxPixelSize: 512,
@@ -144,14 +168,24 @@ final class AppleMusicNowPlaying {
                 self.reading = false
                 if self.visible && request == self.generation {
                     let parts = result.text.trimmingCharacters(in: .newlines).components(separatedBy: "\u{1f}")
-                    if result.success && parts.count == 7 {
-                        self.model?.trackTitle = parts[0]
-                        self.model?.trackArtist = [parts[1], parts[2]].filter { !$0.isEmpty }.joined(separator: " · ")
-                        self.model?.isPlaying = parts[3] == "playing"
-                        self.model?.canControlPlayback = true
-                        self.model?.artwork = cover
+                    if result.success && parts.count == 8 {
+                        self.lastTrackKey = "\(parts[0])|\(parts[1])|\(parts[2])"
+                        if self.model?.trackTitle != parts[0] { self.model?.trackTitle = parts[0] }
+                        let artist = [parts[1], parts[2]].filter { !$0.isEmpty }.joined(separator: " · ")
+                        if self.model?.trackArtist != artist { self.model?.trackArtist = artist }
+                        let playing = parts[3] == "playing"
+                        if self.model?.isPlaying != playing { self.model?.isPlaying = playing }
+                        if self.model?.canControlPlayback != true { self.model?.canControlPlayback = true }
+                        if parts[7] == "cached", parts[6] == self.cachedArtworkID, self.model?.artwork != nil {
+                            self.artworkCacheHitCount += 1
+                        } else {
+                            self.artworkReadCount += 1
+                            self.cachedArtworkID = cover != nil ? parts[6] : ""
+                            self.model?.artwork = cover
+                        }
                         self.acceptProgress(duration: Self.number(parts[4]), position: Self.number(parts[5]), identity: parts[6])
-                        self.model?.metadataHint = cover == nil ? "此曲目暂无可读取封面" : nil
+                        let hint: String? = self.model?.artwork == nil ? "此曲目暂无可读取封面" : nil
+                        if self.model?.metadataHint != hint { self.model?.metadataHint = hint }
                     } else {
                         self.model?.artwork = nil
                         self.model?.canControlPlayback = false
@@ -173,10 +207,11 @@ final class AppleMusicNowPlaying {
     }
 
     private func resetProgress() {
-        model?.trackID = ""
-        model?.trackDuration = 0
+        if model?.trackID != "" { model?.trackID = "" }
+        if model?.trackDuration != 0 { model?.trackDuration = 0 }
         model?.playbackPosition = 0
-        model?.canSeek = false
+        if model?.canSeek != false { model?.canSeek = false }
+        updateProgressTimer()
         anchorPosition = 0
         anchorTime = ProcessInfo.processInfo.systemUptime
     }
@@ -186,13 +221,14 @@ final class AppleMusicNowPlaying {
             resetProgress()
             return
         }
-        model?.trackID = identity
-        model?.trackDuration = duration
-        model?.canSeek = true
+        if model?.trackID != identity { model?.trackID = identity }
+        if model?.trackDuration != duration { model?.trackDuration = duration }
+        if model?.canSeek != true { model?.canSeek = true }
         anchorPosition = min(duration, position)
         anchorTime = ProcessInfo.processInfo.systemUptime
         lastPositionRead = anchorTime
         model?.playbackPosition = anchorPosition
+        updateProgressTimer()
     }
 
     private func tickProgress() {
@@ -228,12 +264,14 @@ final class AppleMusicNowPlaying {
                 }
                 guard parts[0] == self.model?.trackID else {
                     self.generation += 1
-                    self.model?.artwork = nil
+                    self.cachedArtworkID = ""
+                    if self.model?.artwork != nil { self.model?.artwork = nil }
                     self.resetProgress()
                     self.refresh()
                     return
                 }
-                self.model?.isPlaying = parts[3] == "playing"
+                let playing = parts[3] == "playing"
+                if self.model?.isPlaying != playing { self.model?.isPlaying = playing }
                 self.acceptProgress(duration: Self.number(parts[1]), position: Self.number(parts[2]), identity: parts[0])
             }
         }

@@ -46,6 +46,79 @@ enum PlaybackChecks {
         return movedOK && restoredOK && staleRejected
     }
 
+    static func performanceChecks(monitor: AppleMusicNowPlaying, model: PanelModel) -> Bool {
+        guard model.artwork != nil, model.canSeek else { return false }
+        let initialID = model.trackID
+        let initialCover = model.artwork
+        let reads = monitor.artworkReadCount
+        let hits = monitor.artworkCacheHitCount
+        for attempt in 1...2 {
+            monitor.refresh()
+            let deadline = Date().addingTimeInterval(4)
+            while monitor.artworkCacheHitCount < hits + attempt && Date() < deadline { spin(0.05) }
+        }
+        let cached = model.trackID == initialID && model.artwork === initialCover && monitor.artworkReadCount == reads && monitor.artworkCacheHitCount >= hits + 2
+        var panelChanges = 0
+        let cancellable = model.objectWillChange.sink { panelChanges += 1 }
+        let previous = model.playbackPosition
+        model.playbackPosition = previous + 0.01
+        let isolated = panelChanges == 0
+        model.playbackPosition = previous
+        cancellable.cancel()
+        let observer = ProcessOutputActivityObserver()
+        var audioEvents = 0
+        observer.onChange = { audioEvents += 1 }
+        let pid = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Music").first?.processIdentifier
+        observer.update(pid: pid)
+        let attached = observer.isAttached
+        var notifiedStates: [String] = []
+        let token = DistributedNotificationCenter.default().addObserver(forName: NSNotification.Name("com.apple.Music.playerInfo"), object: nil, queue: .main) { note in
+            if let state = note.userInfo?["Player State"] as? String { notifiedStates.append(state) }
+        }
+        var transitions = true
+        if model.isPlaying {
+            notifiedStates.removeAll()
+            monitor.transport("playpause")
+            let pauseDeadline = Date().addingTimeInterval(3)
+            while !notifiedStates.contains("Paused") && Date() < pauseDeadline { spin(0.05) }
+            let paused = readPlayerState() == "paused" && notifiedStates.contains("Paused")
+            if readPlayerState() == "paused" {
+                let resumeStart = notifiedStates.count
+                monitor.transport("playpause")
+                let playDeadline = Date().addingTimeInterval(3)
+                while !notifiedStates.dropFirst(resumeStart).contains("Playing") && Date() < playDeadline { spin(0.05) }
+                let actualState = readPlayerState()
+                let resumed = actualState == "playing" && notifiedStates.dropFirst(resumeStart).contains("Playing")
+                print("Notification states=\(notifiedStates); actual state=\(actualState)")
+                transitions = paused && resumed && !PlaybackActivityGate.isPlaying(outputRunning: true, playerState: "Paused")
+                print("Pause notification=\(paused); resume notification=\(resumed); optional audio callbacks=\(audioEvents)")
+            } else { transitions = false }
+        }
+        DistributedNotificationCenter.default().removeObserver(token)
+        observer.stop()
+        monitor.setVisible(false)
+        let readsBeforeHidden = monitor.artworkReadCount
+        monitor.refresh()
+        spin(0.6)
+        let hidden = monitor.artworkReadCount == readsBeforeHidden
+        monitor.setVisible(true)
+        print("Same-track artwork reused=\(cached); progress updates isolated=\(isolated); audio listener attached=\(attached); play/pause events=\(transitions); hidden refresh suppressed=\(hidden)")
+        return cached && isolated && attached && transitions && hidden
+    }
+
+    private static func readPlayerState() -> String {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        task.arguments = ["-e", "with timeout of 5 seconds\ntell application id \"com.apple.Music\" to return player state as text\nend timeout"]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = FileHandle.nullDevice
+        guard (try? task.run()) != nil else { return "" }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        task.waitUntilExit()
+        return (String(data: data, encoding: .utf8) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     static func spin(_ seconds: Double) {
         let until = Date().addingTimeInterval(seconds)
         while Date() < until { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }

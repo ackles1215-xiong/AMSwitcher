@@ -12,6 +12,9 @@ public final class AppleMusicPlaybackMonitor: SampleRateSource {
 
     private let queue = DispatchQueue(label: "io.github.music-rate-switcher.apple-music", qos: .userInitiated)
     private var timer: DispatchSourceTimer?
+    private var workspaceTokens: [NSObjectProtocol] = []
+    private var historyProcess: Process?
+    private var historyRequest = 0
     private var logProcess: Process?
     private var streamBuffer = Data()
     private var runningPID: pid_t?
@@ -29,10 +32,21 @@ public final class AppleMusicPlaybackMonitor: SampleRateSource {
             guard self.timer == nil else { return }
             self.intentionallyStopping = false
             let timer = DispatchSource.makeTimerSource(queue: self.queue)
-            timer.schedule(deadline: .now(), repeating: 1.0, leeway: .milliseconds(150))
+            timer.schedule(deadline: .now() + 30, repeating: 30, leeway: .seconds(2))
             timer.setEventHandler { [weak self] in self?.checkApplicationState() }
             self.timer = timer
             timer.resume()
+            for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
+                let token = NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: nil) { [weak self] note in
+                    guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+                          app.bundleIdentifier == Self.bundleIdentifier else { return }
+                    self?.queue.async { [weak self] in
+                        guard let self, self.timer != nil else { return }
+                        self.checkApplicationState()
+                    }
+                }
+                self.workspaceTokens.append(token)
+            }
             self.checkApplicationState()
             Diagnostics.shared.info("Apple Music 日志监视器已启动")
         }
@@ -41,6 +55,9 @@ public final class AppleMusicPlaybackMonitor: SampleRateSource {
     public func stop() {
         queue.sync {
             intentionallyStopping = true
+            workspaceTokens.forEach { NSWorkspace.shared.notificationCenter.removeObserver($0) }
+            workspaceTokens.removeAll()
+            cancelHistoryLookup()
             timer?.setEventHandler {}
             timer?.cancel()
             timer = nil
@@ -52,6 +69,7 @@ public final class AppleMusicPlaybackMonitor: SampleRateSource {
 
     public func refreshNow() {
         queue.async {
+            self.cancelHistoryLookup()
             self.stopLogProcess()
             self.checkApplicationState(forceRecentLookup: true)
         }
@@ -64,6 +82,7 @@ public final class AppleMusicPlaybackMonitor: SampleRateSource {
             if runningPID != nil { Diagnostics.shared.info("Apple Music 已退出") }
             runningPID = nil
             lastDetection = nil
+            cancelHistoryLookup()
             stopLogProcess()
             emit(.appNotRunning)
             return
@@ -135,24 +154,60 @@ public final class AppleMusicPlaybackMonitor: SampleRateSource {
         streamBuffer.removeAll(keepingCapacity: false)
     }
 
+    private func cancelHistoryLookup() {
+        historyRequest += 1
+        if let process = historyProcess, process.isRunning { process.terminate() }
+        historyProcess = nil
+    }
+
     private func readRecentLogs() {
+        cancelHistoryLookup()
+        let request = historyRequest
+        let generation = playbackGeneration
+        let pid = runningPID
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/log")
-            process.arguments = [
-                "show", "--last", "5m", "--info", "--debug", "--style", "ndjson",
-                "--predicate", Self.predicate
-            ]
-            let pipe = Pipe()
-            process.standardOutput = pipe
-            process.standardError = FileHandle.nullDevice
-            do {
-                try process.run()
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            guard let self else { return }
+            var best: AppleMusicLogObservation?
+            for window in ["30s", "5m"] {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/log")
+                process.arguments = ["show", "--last", window, "--info", "--debug", "--style", "ndjson", "--predicate", Self.predicate]
+                let pipe = Pipe()
+                process.standardOutput = pipe
+                process.standardError = FileHandle.nullDevice
+                let started: Bool = self.queue.sync {
+                    guard request == self.historyRequest, !self.intentionallyStopping,
+                          self.runningPID == pid, self.playbackGeneration == generation else { return false }
+                    do {
+                        try process.run()
+                        self.historyProcess = process
+                        return true
+                    } catch {
+                        Diagnostics.shared.warning("无法启动 Apple Music 历史日志查询：\(error.localizedDescription)")
+                        return false
+                    }
+                }
+                guard started else { break }
+                let timeout = DispatchWorkItem { if process.isRunning { process.terminate() } }
+                DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 10, execute: timeout)
+                var history = AppleMusicLogHistory()
+                while let data = try? pipe.fileHandleForReading.read(upToCount: 64 * 1024), !data.isEmpty {
+                    history.append(data)
+                }
+                history.finish()
                 process.waitUntilExit()
-                self?.queue.async { self?.consumeRecent(data) }
-            } catch {
-                Diagnostics.shared.warning("无法读取 Apple Music 近期日志：\(error.localizedDescription)")
+                timeout.cancel()
+                if process.terminationStatus == 0, let observation = history.observation { best = observation }
+                if best?.confidence == .activePlayback { break }
+            }
+            let result = best
+            self.queue.async {
+                guard request == self.historyRequest else { return }
+                self.historyProcess = nil
+                // A new live observation or a restart makes the history snapshot stale.
+                guard !self.intentionallyStopping, self.runningPID == pid,
+                      self.playbackGeneration == generation, let result else { return }
+                self.accept(result)
             }
         }
     }
@@ -163,21 +218,6 @@ public final class AppleMusicPlaybackMonitor: SampleRateSource {
             let line = streamBuffer.prefix(upTo: newline)
             streamBuffer.removeSubrange(...newline)
             processJSONLine(Data(line))
-        }
-    }
-
-    private func consumeRecent(_ data: Data) {
-        let lines = data.split(separator: 0x0a)
-        var observations: [AppleMusicLogObservation] = []
-        for line in lines {
-            if let message = eventMessage(from: Data(line)), let observation = AppleMusicLogParser.parse(message: message) {
-                observations.append(observation)
-            }
-        }
-        if let active = observations.last(where: { $0.confidence == .activePlayback }) {
-            accept(active)
-        } else if let fallback = observations.last {
-            accept(fallback)
         }
     }
 

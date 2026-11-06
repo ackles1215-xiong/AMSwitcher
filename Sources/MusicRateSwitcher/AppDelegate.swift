@@ -28,6 +28,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PanelActions, NSPopove
     private var statusFrameKey = ""
     // Presentation only: never used by the sample-rate switching engine.
     private var statusDisplayFormat: SourceAudioFormat?
+    private let activityObserver = ProcessOutputActivityObserver()
+    private var playbackToken: NSObjectProtocol?
+    private var musicPlayerState: String?
+    private var workspaceTokens: [NSObjectProtocol] = []
+    private var paintedFrame: NSImage?
     private var activityTimer: DispatchSourceTimer?
     private var outputActivity: [MusicPlayerID: Bool] = [:]
     private var signalSources: [DispatchSourceSignal] = []
@@ -35,7 +40,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PanelActions, NSPopove
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         model.actions = self
-        configurePopover()
         if let button = statusItem.button {
             button.target = self
             button.action = #selector(statusItemClicked(_:))
@@ -75,6 +79,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PanelActions, NSPopove
         animationTimer = nil
         activityTimer?.cancel()
         activityTimer = nil
+        activityObserver.stop()
+        if let playbackToken { DistributedNotificationCenter.default().removeObserver(playbackToken) }
+        workspaceTokens.forEach { NSWorkspace.shared.notificationCenter.removeObserver($0) }
+        workspaceTokens.removeAll()
         sources.values.forEach { $0.stop() }
         nowPlaying.stop()
         Diagnostics.shared.info("MusicRateSwitcher 已退出")
@@ -132,8 +140,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PanelActions, NSPopove
 
     private func startActivityPolling() {
         guard activityTimer == nil else { return }
+        activityObserver.onChange = { [weak self] in self?.refreshOutputActivity(reason: "音频输出事件") }
+        playbackToken = DistributedNotificationCenter.default().addObserver(forName: NSNotification.Name("com.apple.Music.playerInfo"), object: nil, queue: .main) { [weak self] note in
+            if let state = note.userInfo?["Player State"] as? String, ["Playing", "Paused", "Stopped"].contains(state) {
+                self?.musicPlayerState = state
+            }
+            self?.refreshOutputActivity(reason: "播放状态事件")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in self?.refreshOutputActivity(reason: "播放状态事件确认") }
+        }
+        for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
+            workspaceTokens.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+                      app.bundleIdentifier == "com.apple.Music" else { return }
+                self?.refreshOutputActivity(reason: "Music 进程事件")
+            })
+        }
         let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(deadline: .now(), repeating: 0.6, leeway: .milliseconds(100))
+        timer.schedule(deadline: .now(), repeating: 5, leeway: .milliseconds(700))
         timer.setEventHandler { [weak self] in self?.refreshOutputActivity(reason: "播放器输出状态变化") }
         activityTimer = timer
         timer.resume()
@@ -144,9 +167,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PanelActions, NSPopove
         let previousPlayer = activeDetection?.player
         var refreshed: [MusicPlayerID: Bool] = [:]
         for player in [MusicPlayerID.appleMusic] where settings.isSourceEnabled(player) {
-            refreshed[player] = sources[player]?.activityProcessIDs.contains {
-                audio.processOutputActivity($0) == true
-            } == true
+            let pids = sources[player]?.activityProcessIDs ?? []
+            activityObserver.update(pid: pids.first)
+            refreshed[player] = PlaybackActivityGate.isPlaying(
+                outputRunning: pids.contains { audio.processOutputActivity($0) == true },
+                playerState: musicPlayerState
+            )
         }
         outputActivity = refreshed
         choosePreferredDetection()
@@ -279,7 +305,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PanelActions, NSPopove
                 return image
             }
         }
-        statusItem.button?.image = statusFrames[animationFrame % statusFrames.count]
+        let image = statusFrames[animationFrame % statusFrames.count]
+        if paintedFrame !== image {
+            statusItem.button?.image = image
+            paintedFrame = image
+        }
     }
 
     private func updateStatusButton() {
@@ -312,6 +342,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PanelActions, NSPopove
     }
 
     private func showPanel() {
+        if popover.contentViewController == nil { configurePopover() }
         guard let button = statusItem.button else { return }
         devices = audio.outputDevices()
         refreshUI()

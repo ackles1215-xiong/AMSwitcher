@@ -212,10 +212,15 @@ private final class SeekState: ObservableObject {
 
 private struct PlaybackProgress: View {
     @ObservedObject var model: PanelModel
+    @ObservedObject var progress: PlaybackProgressModel
+    init(model: PanelModel) {
+        self.model = model
+        self.progress = model.progress
+    }
     @StateObject private var seekState = SeekState()
 
     private var position: Double {
-        min(max(0, seekState.dragging ? seekState.draft : model.playbackPosition), max(0, model.trackDuration))
+        min(max(0, seekState.dragging ? seekState.draft : progress.position), max(0, model.trackDuration))
     }
 
     var body: some View {

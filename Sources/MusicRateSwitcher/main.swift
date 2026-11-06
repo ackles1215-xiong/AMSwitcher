@@ -10,7 +10,7 @@ if let index = CommandLine.arguments.firstIndex(of: "--metadata-check"), index +
     let audio = CoreAudioController()
     model.devices = audio.outputDevices()
     model.selectedDevice = model.devices.first(where: \.isDefault)
-    model.version = "1.4.2"
+    model.version = "1.5.0"
     let source = AppleMusicPlaybackMonitor()
     source.onFormatChanged = { detection in
         DispatchQueue.main.async {
@@ -31,16 +31,23 @@ if let index = CommandLine.arguments.firstIndex(of: "--metadata-check"), index +
     try? FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
     SnapshotRenderer.render(PanelView(model: model), to: output.appendingPathComponent("panel-live.png"), appearance: .darkAqua)
     print("Metadata=\(model.trackTitle != "Apple Music"); artwork=\(model.artwork != nil); boundedArtwork=\((model.artwork?.size.width ?? 0) <= 512); gradientPalette=\(model.artworkPalette.count == 2); controls=\(model.canControlPlayback); seekable=\(model.canSeek); position=\(model.playbackPosition); duration=\(model.trackDuration)")
+    let metadataOK = model.artwork != nil && model.canControlPlayback
+    let sourceOK = model.activeDetection != nil
+    print("Actual source format detected=\(sourceOK)")
     let framesOK = PlaybackChecks.checkFrames()
     print("Animated frames differ; idle frames stay fixed; rate/idle widths stable: \(framesOK)")
     var seekOK = true
     if CommandLine.arguments.contains("--seek-check") {
         seekOK = PlaybackChecks.seekRoundtrip(monitor: monitor, model: model)
     }
+    var performanceOK = true
+    if CommandLine.arguments.contains("--perf-check") {
+        performanceOK = PlaybackChecks.performanceChecks(monitor: monitor, model: model)
+    }
     monitor.setVisible(false)
     monitor.stop()
     source.stop()
-    exit(model.artwork != nil && model.canControlPlayback && framesOK && seekOK ? 0 : 2)
+    exit(metadataOK && sourceOK && framesOK && seekOK && performanceOK ? 0 : 2)
 }
 if let index = CommandLine.arguments.firstIndex(of: "--snapshot"), index + 1 < CommandLine.arguments.count {
     application.setActivationPolicy(.accessory)

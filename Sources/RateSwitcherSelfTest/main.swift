@@ -180,6 +180,39 @@ do {
     let lossyLog = "play> cm>> sdFormatID = aac, sdBitDepth = 16 bit, asbdSampleRate = 48 kHz"
     try check(AppleMusicLogParser.parse(message: lossyLog) == nil, "Apple Music 有损占位日志不应触发切换")
 
+    // History must parse arbitrary pipe chunk boundaries without retaining the whole lookup.
+    func jsonLog(_ message: String, key: String = "eventMessage") throws -> Data {
+        var data = try JSONSerialization.data(withJSONObject: [key: message])
+        data.append(0x0a)
+        return data
+    }
+    let activeLine = try jsonLog(applePlaybackLog)
+    let fallbackLine = try jsonLog(appleDecoderLog, key: "composedMessage")
+    let historyInput = fallbackLine + Data("not-json\n".utf8) + activeLine + fallbackLine
+    var chunkedHistory = AppleMusicLogHistory()
+    for index in stride(from: 0, to: historyInput.count, by: 7) {
+        chunkedHistory.append(historyInput.subdata(in: index..<min(index + 7, historyInput.count)))
+    }
+    chunkedHistory.finish()
+    try check(chunkedHistory.observation == applePlayback, "分块日志必须保留最后有效播放格式，不能被后续解码回退覆盖")
+    try check(chunkedHistory.bufferedByteCount == 0, "历史解析结束后应释放行缓冲")
+    var fallbackHistory = AppleMusicLogHistory()
+    fallbackHistory.append(Data(fallbackLine.dropLast()))
+    fallbackHistory.finish()
+    try check(fallbackHistory.observation == appleDecoder, "无换行结尾的解码日志仍应作为回退格式")
+    var boundedHistory = AppleMusicLogHistory()
+    boundedHistory.append(Data(repeating: 0x61, count: 600 * 1024))
+    try check(boundedHistory.bufferedByteCount <= 512 * 1024, "异常日志行不得无界增长")
+    boundedHistory.append(Data("discard-end\n".utf8) + activeLine)
+    boundedHistory.finish()
+    try check(boundedHistory.observation == applePlayback, "跳过异常大行后必须恢复读取下一条有效日志")
+
+    try check(!PlaybackActivityGate.isPlaying(outputRunning: true, playerState: "Paused"), "暂停时不能因静音音频引擎仍运行而显示播放动画")
+    try check(!PlaybackActivityGate.isPlaying(outputRunning: true, playerState: "Stopped"), "停止时必须停止动画")
+    try check(PlaybackActivityGate.isPlaying(outputRunning: true, playerState: "Playing"), "真实输出且播放时应启用动画")
+    try check(!PlaybackActivityGate.isPlaying(outputRunning: false, playerState: "Playing"), "没有实际输出不能只凭播放提示启用动画")
+    try check(PlaybackActivityGate.isPlaying(outputRunning: true, playerState: nil), "缺失通知时应保留 Core Audio 兜底判断")
+
     let earlier = Date(timeIntervalSince1970: 100)
     let later = Date(timeIntervalSince1970: 200)
     let appleDetection = DetectedSourceFormat(

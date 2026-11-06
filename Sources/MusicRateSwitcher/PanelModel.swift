@@ -47,6 +47,10 @@ enum SyncState: Equatable {
     case failed(String)
 }
 
+final class PlaybackProgressModel: ObservableObject {
+    @Published var position: Double = 0
+}
+
 /// Snapshot of everything the status item and popover render.
 final class PanelModel: ObservableObject {
     @Published var players: [PlayerRowState] = [MusicPlayerID.appleMusic].map {
@@ -65,7 +69,11 @@ final class PanelModel: ObservableObject {
         didSet { artworkPalette = artwork.flatMap(Self.makePalette) ?? Self.defaultPalette }
     }
     @Published private(set) var artworkPalette: [NSColor] = PanelModel.defaultPalette
-    @Published var playbackPosition: Double = 0
+    let progress = PlaybackProgressModel()
+    var playbackPosition: Double {
+        get { progress.position }
+        set { if progress.position != newValue { progress.position = newValue } }
+    }
     @Published var trackDuration: Double = 0
     @Published var trackID = ""
     @Published var canSeek = false
