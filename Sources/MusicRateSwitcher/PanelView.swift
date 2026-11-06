@@ -122,7 +122,12 @@ private struct NowPlayingCard: View {
                 Label("APPLE MUSIC", systemImage: "music.note")
                     .font(.system(size: 9, weight: .bold)).tracking(1.5)
                 Spacer()
-                SyncBadge(sync: model.sync, automatic: model.autoSwitch, hasSource: model.activeDetection != nil)
+                if model.isPlaying && model.activeDetection == nil {
+                    Text("格式待确认").font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.7))
+                } else {
+                    SyncBadge(sync: model.sync, automatic: model.autoSwitch, hasSource: model.activeDetection != nil)
+                }
             }.foregroundStyle(.white.opacity(0.8))
 
             HStack(spacing: 14) {

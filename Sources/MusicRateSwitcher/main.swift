@@ -10,7 +10,7 @@ if let index = CommandLine.arguments.firstIndex(of: "--metadata-check"), index +
     let audio = CoreAudioController()
     model.devices = audio.outputDevices()
     model.selectedDevice = model.devices.first(where: \.isDefault)
-    model.version = "1.5.0"
+    model.version = "1.5.2"
     let source = AppleMusicPlaybackMonitor()
     source.onFormatChanged = { detection in
         DispatchQueue.main.async {
